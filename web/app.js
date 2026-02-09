@@ -1,17 +1,21 @@
 const boardEl = document.getElementById("board");
 const modalEl = document.getElementById("modal");
 const formEl = document.getElementById("task-form");
+const columnSelect = formEl.querySelector("select[name=\"column\"]");
 const newBoardButton = document.getElementById("new-board");
+const newColumnButton = document.getElementById("new-column");
 const closeModalButton = document.getElementById("close-modal");
 const statActive = document.getElementById("stat-active");
 const statDue = document.getElementById("stat-due");
 
-const columns = [
-  { id: "backlog", title: "Backlog" },
-  { id: "progress", title: "В процес" },
-  { id: "review", title: "Преглед" },
-  { id: "done", title: "Готово" },
+const defaultColumns = [
+  { id: "backlog", title: "Backlog", color: "#5b6bff" },
+  { id: "progress", title: "В процес", color: "#2bb8a1" },
+  { id: "review", title: "Преглед", color: "#f8b259" },
+  { id: "done", title: "Готово", color: "#7b8afd" },
 ];
+
+const columnPalette = ["#5b6bff", "#2bb8a1", "#f8b259", "#7b8afd", "#ff7a7a", "#6dd3ff"];
 
 const defaultTasks = [
   {
@@ -48,6 +52,19 @@ const defaultTasks = [
   },
 ];
 
+const loadColumns = () => {
+  const stored = localStorage.getItem("teamio-columns");
+  if (!stored) {
+    localStorage.setItem("teamio-columns", JSON.stringify(defaultColumns));
+    return [...defaultColumns];
+  }
+  return JSON.parse(stored);
+};
+
+const saveColumns = (columns) => {
+  localStorage.setItem("teamio-columns", JSON.stringify(columns));
+};
+
 const loadTasks = () => {
   const stored = localStorage.getItem("teamio-tasks");
   if (!stored) {
@@ -70,11 +87,12 @@ const closeModal = () => {
   formEl.reset();
 };
 
-const createCard = (task) => {
+const createCard = (task, columnColor) => {
   const card = document.createElement("article");
   card.className = "card";
   card.draggable = true;
   card.dataset.taskId = task.id;
+  card.style.setProperty("--card-accent", columnColor ?? "#5b6bff");
 
   const title = document.createElement("div");
   title.className = "card__title";
@@ -106,6 +124,7 @@ const createCard = (task) => {
 
 const renderBoard = (tasks) => {
   boardEl.innerHTML = "";
+  const columns = loadColumns();
   const activeCount = tasks.filter((task) => task.column !== "done").length;
   const dueCount = tasks.filter((task) => task.due).length;
   statActive.textContent = activeCount.toString();
@@ -119,19 +138,48 @@ const renderBoard = (tasks) => {
     const header = document.createElement("div");
     header.className = "column__header";
 
+    const titleWrap = document.createElement("div");
+    titleWrap.className = "column__title";
+
+    const swatch = document.createElement("span");
+    swatch.className = "column__swatch";
+    swatch.style.background = column.color;
+
     const title = document.createElement("h3");
     title.textContent = column.title;
+
+    titleWrap.append(swatch, title);
 
     const count = document.createElement("span");
     count.className = "column__count";
     const columnTasks = tasks.filter((task) => task.column === column.id);
     count.textContent = `${columnTasks.length} задачи`;
 
-    header.append(title, count);
+    const actions = document.createElement("div");
+    actions.className = "column__actions";
+
+    const renameButton = document.createElement("button");
+    renameButton.type = "button";
+    renameButton.className = "column__rename";
+    renameButton.textContent = "Преименувай";
+    renameButton.addEventListener("click", () => {
+      const newName = window.prompt("Ново име на колоната:", column.title);
+      if (!newName) {
+        return;
+      }
+      const updatedColumns = columns.map((item) =>
+        item.id === column.id ? { ...item, title: newName.trim() } : item
+      );
+      saveColumns(updatedColumns);
+      renderBoard(tasks);
+    });
+
+    actions.append(count, renameButton);
+    header.append(titleWrap, actions);
     columnEl.append(header);
 
     columnTasks.forEach((task) => {
-      columnEl.append(createCard(task));
+      columnEl.append(createCard(task, column.color));
     });
 
     columnEl.addEventListener("dragover", (event) => {
@@ -150,7 +198,32 @@ const renderBoard = (tasks) => {
 
     boardEl.append(columnEl);
   });
+
+  columnSelect.innerHTML = "";
+  columns.forEach((column) => {
+    const option = document.createElement("option");
+    option.value = column.id;
+    option.textContent = column.title;
+    columnSelect.append(option);
+  });
 };
+
+newColumnButton.addEventListener("click", () => {
+  const name = window.prompt("Име на новата колона:");
+  if (!name) {
+    return;
+  }
+  const columns = loadColumns();
+  const nextColor = columnPalette[columns.length % columnPalette.length];
+  const newColumn = {
+    id: `column-${Date.now()}`,
+    title: name.trim(),
+    color: nextColor,
+  };
+  const updated = [...columns, newColumn];
+  saveColumns(updated);
+  renderBoard(loadTasks());
+});
 
 newBoardButton.addEventListener("click", openModal);
 closeModalButton.addEventListener("click", closeModal);

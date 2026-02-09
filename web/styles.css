@@ -4,6 +4,9 @@
   --card: #ffffff;
   --primary: #5b6bff;
   --primary-dark: #3f49d2;
+  --accent: #f8b259;
+  --accent-soft: rgba(248, 178, 89, 0.18);
+  --secondary: #2bb8a1;
   --text: #141522;
   --muted: #6b6f85;
   --border: #e3e6f2;
@@ -16,7 +19,7 @@
 
 body {
   margin: 0;
-  background: var(--bg);
+  background: linear-gradient(180deg, #f4f6ff 0%, #f7f6fb 100%);
   color: var(--text);
 }
 
@@ -168,6 +171,11 @@ body {
   color: var(--text);
 }
 
+.ghost:hover {
+  border-color: var(--primary);
+  color: var(--primary-dark);
+}
+
 .overview {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -180,6 +188,7 @@ body {
   border-radius: 16px;
   padding: 16px;
   box-shadow: 0 10px 20px rgba(20, 21, 34, 0.04);
+  border: 1px solid rgba(91, 107, 255, 0.08);
 }
 
 .stat h4 {
@@ -216,6 +225,20 @@ body {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 12px;
+  gap: 8px;
+}
+
+.column__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.column__swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 4px;
+  background: var(--accent);
 }
 
 .column__header h3 {
@@ -231,6 +254,23 @@ body {
   color: var(--muted);
 }
 
+.column__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.column__rename {
+  border: none;
+  background: var(--accent-soft);
+  color: #b76d1d;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 .card {
   background: #fff;
   border-radius: 16px;
@@ -241,6 +281,7 @@ body {
   gap: 10px;
   margin-bottom: 12px;
   box-shadow: 0 12px 20px rgba(20, 21, 34, 0.05);
+  border-left: 3px solid var(--card-accent, var(--primary));
 }
 
 .card__title {
