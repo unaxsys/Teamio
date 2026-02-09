@@ -1,9 +1,23 @@
 const boardEl = document.getElementById("board");
+const appEl = document.getElementById("app");
+const authScreenEl = document.getElementById("auth-screen");
+const loginForm = document.getElementById("login-form");
+const registerForm = document.getElementById("register-form");
+const authMessage = document.getElementById("auth-message");
+const authToggleButtons = document.querySelectorAll(".auth-toggle__button");
+const profileName = document.getElementById("profile-name");
+const profileAvatar = document.getElementById("profile-avatar");
+const logoutButton = document.getElementById("logout");
 const modalEl = document.getElementById("modal");
 const formEl = document.getElementById("task-form");
 const columnSelect = formEl.querySelector("select[name=\"column\"]");
 const newBoardButton = document.getElementById("new-board");
 const newColumnButton = document.getElementById("new-column");
+const navItems = document.querySelectorAll(".nav__item");
+const tabPanels = document.querySelectorAll(".tab-panel");
+const settingsButton = document.getElementById("open-settings");
+const colorSwatches = document.querySelectorAll(".color-swatch");
+const densityButtons = document.querySelectorAll(".density-button");
 const closeModalButton = document.getElementById("close-modal");
 const statActive = document.getElementById("stat-active");
 const statDue = document.getElementById("stat-due");
@@ -63,6 +77,105 @@ const loadColumns = () => {
 
 const saveColumns = (columns) => {
   localStorage.setItem("teamio-columns", JSON.stringify(columns));
+};
+
+const loadUsers = () => JSON.parse(localStorage.getItem("teamio-users") ?? "[]");
+
+const saveUsers = (users) => {
+  localStorage.setItem("teamio-users", JSON.stringify(users));
+};
+
+const setAuthMessage = (message) => {
+  authMessage.textContent = message;
+};
+
+const setCurrentUser = (user) => {
+  localStorage.setItem("teamio-current-user", JSON.stringify(user));
+};
+
+const loadCurrentUser = () => {
+  const stored = localStorage.getItem("teamio-current-user");
+  return stored ? JSON.parse(stored) : null;
+};
+
+const updateProfile = (user) => {
+  if (!user) {
+    profileName.textContent = "Гост";
+    profileAvatar.textContent = "ТИ";
+    return;
+  }
+  profileName.textContent = user.name;
+  profileAvatar.textContent = user.name
+    .split(" ")
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
+};
+
+const showApp = (user) => {
+  authScreenEl.style.display = "none";
+  appEl.classList.remove("app--hidden");
+  updateProfile(user);
+};
+
+const showAuth = () => {
+  authScreenEl.style.display = "flex";
+  appEl.classList.add("app--hidden");
+};
+
+const handleLogin = (email, password) => {
+  const users = loadUsers();
+  const user = users.find((item) => item.email === email && item.password === password);
+  if (!user) {
+    setAuthMessage("Невалидни данни. Провери имейла и паролата.");
+    return;
+  }
+  setCurrentUser(user);
+  setAuthMessage("");
+  showApp(user);
+};
+
+const handleRegister = (name, email, password) => {
+  const users = loadUsers();
+  if (users.some((item) => item.email === email)) {
+    setAuthMessage("Този имейл вече е регистриран.");
+    return;
+  }
+  const newUser = { id: `user-${Date.now()}`, name, email, password };
+  const updated = [...users, newUser];
+  saveUsers(updated);
+  setCurrentUser(newUser);
+  setAuthMessage("");
+  showApp(newUser);
+};
+
+const applyThemeColor = (color) => {
+  if (!color) {
+    return;
+  }
+  document.documentElement.style.setProperty("--primary", color);
+  document.documentElement.style.setProperty("--primary-dark", color);
+  localStorage.setItem("teamio-theme", color);
+};
+
+const loadTheme = () => {
+  const saved = localStorage.getItem("teamio-theme");
+  if (saved) {
+    applyThemeColor(saved);
+  }
+};
+
+const applyDensity = (mode) => {
+  document.body.classList.toggle("density-compact", mode === "compact");
+  localStorage.setItem("teamio-density", mode);
+};
+
+const loadDensity = () => {
+  const saved = localStorage.getItem("teamio-density");
+  if (saved) {
+    applyDensity(saved);
+  }
 };
 
 const loadTasks = () => {
@@ -225,6 +338,70 @@ newColumnButton.addEventListener("click", () => {
   renderBoard(loadTasks());
 });
 
+authToggleButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    authToggleButtons.forEach((btn) =>
+      btn.classList.toggle("auth-toggle__button--active", btn === button)
+    );
+    const target = button.dataset.auth;
+    loginForm.classList.toggle("auth-form--active", target === "login");
+    registerForm.classList.toggle("auth-form--active", target === "register");
+    setAuthMessage("");
+  });
+});
+
+loginForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const formData = new FormData(loginForm);
+  handleLogin(formData.get("email").toString(), formData.get("password").toString());
+});
+
+registerForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const formData = new FormData(registerForm);
+  handleRegister(
+    formData.get("name").toString(),
+    formData.get("email").toString(),
+    formData.get("password").toString()
+  );
+});
+
+logoutButton.addEventListener("click", () => {
+  localStorage.removeItem("teamio-current-user");
+  showAuth();
+});
+
+const activateTab = (tabId) => {
+  navItems.forEach((item) => {
+    item.classList.toggle("nav__item--active", item.dataset.tab === tabId);
+  });
+  tabPanels.forEach((panel) => {
+    panel.classList.toggle("tab-panel--active", panel.dataset.tabPanel === tabId);
+  });
+};
+
+navItems.forEach((item) => {
+  item.addEventListener("click", () => {
+    activateTab(item.dataset.tab);
+  });
+});
+
+settingsButton.addEventListener("click", () => {
+  activateTab("settings");
+});
+
+colorSwatches.forEach((swatch) => {
+  swatch.addEventListener("click", () => {
+    applyThemeColor(swatch.dataset.color);
+  });
+});
+
+densityButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    applyDensity(button.dataset.density);
+  });
+});
+
 newBoardButton.addEventListener("click", openModal);
 closeModalButton.addEventListener("click", closeModal);
 modalEl.addEventListener("click", (event) => {
@@ -252,4 +429,13 @@ formEl.addEventListener("submit", (event) => {
 });
 
 const initialTasks = loadTasks();
+loadTheme();
+loadDensity();
 renderBoard(initialTasks);
+
+const activeUser = loadCurrentUser();
+if (activeUser) {
+  showApp(activeUser);
+} else {
+  showAuth();
+}
