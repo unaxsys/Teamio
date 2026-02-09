@@ -18,3 +18,19 @@ npm start
 ```
 
 > Note: The desktop app loads the same `web/index.html` file to keep the experience consistent across platforms.
+
+## Syncing with Pull Requests
+If you open a PR on GitHub, your local files will only update after you fetch the branch or pull the merge result.
+
+### Pull the PR branch locally
+```
+git fetch origin
+git checkout <pr-branch-name>
+git pull
+```
+
+### After merging the PR
+```
+git checkout main
+git pull
+```

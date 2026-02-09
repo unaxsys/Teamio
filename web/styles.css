@@ -325,8 +325,20 @@ body {
 
 .board {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  grid-template-columns: repeat(4, minmax(240px, 1fr));
   gap: 18px;
+  align-items: start;
+  overflow-x: auto;
+  padding-bottom: 12px;
+}
+
+.board::-webkit-scrollbar {
+  height: 8px;
+}
+
+.board::-webkit-scrollbar-thumb {
+  background: rgba(91, 107, 255, 0.25);
+  border-radius: 999px;
 }
 
 .column {

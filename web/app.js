@@ -126,6 +126,15 @@ const showAuth = () => {
 
 const handleLogin = (email, password) => {
   const users = loadUsers();
+  if (users.length === 0) {
+    setAuthMessage("Нямаш акаунт. Регистрирай се, за да влезеш.");
+    loginForm.classList.remove("auth-form--active");
+    registerForm.classList.add("auth-form--active");
+    authToggleButtons.forEach((btn) =>
+      btn.classList.toggle("auth-toggle__button--active", btn.dataset.auth === "register")
+    );
+    return;
+  }
   const user = users.find((item) => item.email === email && item.password === password);
   if (!user) {
     setAuthMessage("Невалидни данни. Провери имейла и паролата.");
@@ -338,15 +347,18 @@ newColumnButton.addEventListener("click", () => {
   renderBoard(loadTasks());
 });
 
+const activateAuthForm = (target) => {
+  authToggleButtons.forEach((btn) =>
+    btn.classList.toggle("auth-toggle__button--active", btn.dataset.auth === target)
+  );
+  loginForm.classList.toggle("auth-form--active", target === "login");
+  registerForm.classList.toggle("auth-form--active", target === "register");
+  setAuthMessage("");
+};
+
 authToggleButtons.forEach((button) => {
   button.addEventListener("click", () => {
-    authToggleButtons.forEach((btn) =>
-      btn.classList.toggle("auth-toggle__button--active", btn === button)
-    );
-    const target = button.dataset.auth;
-    loginForm.classList.toggle("auth-form--active", target === "login");
-    registerForm.classList.toggle("auth-form--active", target === "register");
-    setAuthMessage("");
+    activateAuthForm(button.dataset.auth);
   });
 });
 
