@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="bg">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Teamio – работни табла</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;600;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand__dot"></span>
+          <div>
+            <p class="brand__name">Teamio</p>
+            <p class="brand__tag">Умно планиране</p>
+          </div>
+        </div>
+        <nav class="nav">
+          <button class="nav__item nav__item--active">Табла</button>
+          <button class="nav__item">Екипи</button>
+          <button class="nav__item">Календар</button>
+          <button class="nav__item">Отчети</button>
+        </nav>
+        <div class="sync">
+          <h3>Синхронизация</h3>
+          <p>Всички промени се записват локално и са готови за desktop версията.</p>
+          <div class="sync__status">
+            <span class="sync__dot"></span>
+            <span>Онлайн</span>
+          </div>
+        </div>
+      </aside>
+      <main class="main">
+        <header class="header">
+          <div>
+            <h1>Работно табло</h1>
+            <p>Организирай задачите си с един поглед.</p>
+          </div>
+          <div class="header__actions">
+            <button class="ghost" id="new-column">Нова колона</button>
+            <button class="ghost">Настройки</button>
+            <button class="primary" id="new-board">Нова задача</button>
+          </div>
+        </header>
+
+        <section class="overview">
+          <div class="stat">
+            <h4>Активни задачи</h4>
+            <p id="stat-active">0</p>
+          </div>
+          <div class="stat">
+            <h4>Екип</h4>
+            <p>6 човека</p>
+          </div>
+          <div class="stat">
+            <h4>Срокове тази седмица</h4>
+            <p id="stat-due">0</p>
+          </div>
+        </section>
+
+        <section class="board" id="board"></section>
+      </main>
+    </div>
+
+    <div class="modal" id="modal">
+      <div class="modal__card">
+        <h2>Нова задача</h2>
+        <form id="task-form">
+          <label>
+            Заглавие
+            <input type="text" name="title" placeholder="Напр. UX преглед" required />
+          </label>
+          <label>
+            Описание
+            <textarea name="description" rows="3" placeholder="Какво трябва да бъде направено?"></textarea>
+          </label>
+          <label>
+            Срок
+            <input type="date" name="due" />
+          </label>
+          <label>
+            Колона
+            <select name="column">
+              <option value="backlog">Backlog</option>
+              <option value="progress">В процес</option>
+              <option value="review">Преглед</option>
+              <option value="done">Готово</option>
+            </select>
+          </label>
+          <div class="modal__actions">
+            <button type="button" class="ghost" id="close-modal">Отказ</button>
+            <button type="submit" class="primary">Добави</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
