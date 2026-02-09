@@ -44,6 +44,7 @@
             <input type="password" name="password" placeholder="••••••••" required />
           </label>
           <button type="submit" class="primary">Влез</button>
+          <button type="button" class="link-button" id="forgot-password">Забравена парола?</button>
           <p class="auth-note">Нямаш акаунт? Създай го за секунди.</p>
         </form>
         <form class="auth-form" id="register-form">
@@ -63,6 +64,40 @@
           <p class="auth-note">Вече имаш акаунт? Използвай вход.</p>
         </form>
         <div class="auth-message" id="auth-message" role="status" aria-live="polite"></div>
+      </div>
+    </div>
+
+    <div class="modal" id="reset-modal">
+      <div class="modal__card">
+        <h2>Възстановяване на парола</h2>
+        <form id="reset-request-form">
+          <label>
+            Имейл
+            <input type="email" name="email" placeholder="team@company.com" required />
+          </label>
+          <button type="submit" class="primary">Изпрати линк</button>
+        </form>
+        <div class="reset-link" id="reset-link"></div>
+        <div class="modal__actions">
+          <button type="button" class="ghost" id="close-reset">Затвори</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal" id="new-password-modal">
+      <div class="modal__card">
+        <h2>Нова парола</h2>
+        <form id="new-password-form">
+          <input type="hidden" name="token" />
+          <label>
+            Нова парола
+            <input type="password" name="password" placeholder="Минимум 6 символа" minlength="6" required />
+          </label>
+          <button type="submit" class="primary">Запази</button>
+        </form>
+        <div class="modal__actions">
+          <button type="button" class="ghost" id="close-new-password">Затвори</button>
+        </div>
       </div>
     </div>
 

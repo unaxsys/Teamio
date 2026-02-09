@@ -8,6 +8,14 @@ const authToggleButtons = document.querySelectorAll(".auth-toggle__button");
 const profileName = document.getElementById("profile-name");
 const profileAvatar = document.getElementById("profile-avatar");
 const logoutButton = document.getElementById("logout");
+const forgotPasswordButton = document.getElementById("forgot-password");
+const resetModal = document.getElementById("reset-modal");
+const resetRequestForm = document.getElementById("reset-request-form");
+const resetLinkEl = document.getElementById("reset-link");
+const closeResetButton = document.getElementById("close-reset");
+const newPasswordModal = document.getElementById("new-password-modal");
+const newPasswordForm = document.getElementById("new-password-form");
+const closeNewPasswordButton = document.getElementById("close-new-password");
 const modalEl = document.getElementById("modal");
 const formEl = document.getElementById("task-form");
 const columnSelect = formEl.querySelector("select[name=\"column\"]");
@@ -85,6 +93,20 @@ const saveUsers = (users) => {
   localStorage.setItem("teamio-users", JSON.stringify(users));
 };
 
+const hashPassword = async (password) => {
+  const data = new TextEncoder().encode(password);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+};
+
+const saveResetTokens = (tokens) => {
+  localStorage.setItem("teamio-reset-tokens", JSON.stringify(tokens));
+};
+
+const loadResetTokens = () => JSON.parse(localStorage.getItem("teamio-reset-tokens") ?? "[]");
+
 const setAuthMessage = (message) => {
   authMessage.textContent = message;
 };
@@ -124,7 +146,7 @@ const showAuth = () => {
   appEl.classList.add("app--hidden");
 };
 
-const handleLogin = (email, password) => {
+const handleLogin = async (email, password) => {
   const users = loadUsers();
   if (users.length === 0) {
     setAuthMessage("Нямаш акаунт. Регистрирай се, за да влезеш.");
@@ -135,7 +157,8 @@ const handleLogin = (email, password) => {
     );
     return;
   }
-  const user = users.find((item) => item.email === email && item.password === password);
+  const hashed = await hashPassword(password);
+  const user = users.find((item) => item.email === email && item.password === hashed);
   if (!user) {
     setAuthMessage("Невалидни данни. Провери имейла и паролата.");
     return;
@@ -145,18 +168,59 @@ const handleLogin = (email, password) => {
   showApp(user);
 };
 
-const handleRegister = (name, email, password) => {
+const handleRegister = async (name, email, password) => {
   const users = loadUsers();
   if (users.some((item) => item.email === email)) {
     setAuthMessage("Този имейл вече е регистриран.");
     return;
   }
-  const newUser = { id: `user-${Date.now()}`, name, email, password };
+  const hashed = await hashPassword(password);
+  const newUser = { id: `user-${Date.now()}`, name, email, password: hashed };
   const updated = [...users, newUser];
   saveUsers(updated);
   setCurrentUser(newUser);
   setAuthMessage("");
   showApp(newUser);
+};
+
+const openModal = (modal) => {
+  modal.classList.add("modal--open");
+};
+
+const closeModal = (modal) => {
+  modal.classList.remove("modal--open");
+};
+
+const generateToken = () => {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes)
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+};
+
+const requestPasswordReset = (email) => {
+  const users = loadUsers();
+  const user = users.find((item) => item.email === email);
+  if (!user) {
+    resetLinkEl.textContent = "Няма потребител с този имейл.";
+    return;
+  }
+  const tokens = loadResetTokens();
+  const token = generateToken();
+  tokens.push({ token, email, createdAt: Date.now() });
+  saveResetTokens(tokens);
+  resetLinkEl.textContent = `Линк за смяна на парола (демо): ${window.location.origin}${window.location.pathname}?reset=${token}`;
+};
+
+const openResetFromUrl = () => {
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get("reset");
+  if (!token) {
+    return;
+  }
+  newPasswordForm.querySelector("input[name=\"token\"]").value = token;
+  openModal(newPasswordModal);
 };
 
 const applyThemeColor = (color) => {
@@ -200,11 +264,11 @@ const saveTasks = (tasks) => {
   localStorage.setItem("teamio-tasks", JSON.stringify(tasks));
 };
 
-const openModal = () => {
+const openTaskModal = () => {
   modalEl.classList.add("modal--open");
 };
 
-const closeModal = () => {
+const closeTaskModal = () => {
   modalEl.classList.remove("modal--open");
   formEl.reset();
 };
@@ -362,20 +426,66 @@ authToggleButtons.forEach((button) => {
   });
 });
 
-loginForm.addEventListener("submit", (event) => {
+loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const formData = new FormData(loginForm);
-  handleLogin(formData.get("email").toString(), formData.get("password").toString());
+  await handleLogin(formData.get("email").toString(), formData.get("password").toString());
 });
 
-registerForm.addEventListener("submit", (event) => {
+registerForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const formData = new FormData(registerForm);
-  handleRegister(
+  await handleRegister(
     formData.get("name").toString(),
     formData.get("email").toString(),
     formData.get("password").toString()
   );
+});
+
+forgotPasswordButton.addEventListener("click", () => {
+  resetLinkEl.textContent = "";
+  resetRequestForm.reset();
+  openModal(resetModal);
+});
+
+closeResetButton.addEventListener("click", () => {
+  closeModal(resetModal);
+});
+
+resetRequestForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const formData = new FormData(resetRequestForm);
+  requestPasswordReset(formData.get("email").toString());
+});
+
+newPasswordForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const formData = new FormData(newPasswordForm);
+  const token = formData.get("token").toString();
+  const newPassword = formData.get("password").toString();
+  const tokens = loadResetTokens();
+  const tokenRecord = tokens.find((item) => item.token === token);
+  if (!tokenRecord) {
+    setAuthMessage("Линкът за възстановяване е невалиден.");
+    return;
+  }
+  const users = loadUsers();
+  const updatedUsers = await Promise.all(
+    users.map(async (user) => {
+      if (user.email !== tokenRecord.email) {
+        return user;
+      }
+      return { ...user, password: await hashPassword(newPassword) };
+    })
+  );
+  saveUsers(updatedUsers);
+  saveResetTokens(tokens.filter((item) => item.token !== token));
+  closeModal(newPasswordModal);
+  setAuthMessage("Паролата е обновена. Можеш да влезеш.");
+});
+
+closeNewPasswordButton.addEventListener("click", () => {
+  closeModal(newPasswordModal);
 });
 
 logoutButton.addEventListener("click", () => {
@@ -414,11 +524,23 @@ densityButtons.forEach((button) => {
   });
 });
 
-newBoardButton.addEventListener("click", openModal);
-closeModalButton.addEventListener("click", closeModal);
+newBoardButton.addEventListener("click", openTaskModal);
+closeModalButton.addEventListener("click", closeTaskModal);
 modalEl.addEventListener("click", (event) => {
   if (event.target === modalEl) {
-    closeModal();
+    closeTaskModal();
+  }
+});
+
+resetModal.addEventListener("click", (event) => {
+  if (event.target === resetModal) {
+    closeModal(resetModal);
+  }
+});
+
+newPasswordModal.addEventListener("click", (event) => {
+  if (event.target === newPasswordModal) {
+    closeModal(newPasswordModal);
   }
 });
 
@@ -437,7 +559,7 @@ formEl.addEventListener("submit", (event) => {
   const updated = [newTask, ...tasks];
   saveTasks(updated);
   renderBoard(updated);
-  closeModal();
+  closeTaskModal();
 });
 
 const initialTasks = loadTasks();
@@ -451,3 +573,5 @@ if (activeUser) {
 } else {
   showAuth();
 }
+
+openResetFromUrl();
