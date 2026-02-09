@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="bg">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Teamio – работни табла</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;600;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand__dot"></span>
+          <div>
+            <p class="brand__name">Teamio</p>
+            <p class="brand__tag">Умно планиране</p>
+          </div>
+        </div>
+        <nav class="nav">
+          <button class="nav__item nav__item--active" data-tab="boards">Табла</button>
+          <button class="nav__item" data-tab="teams">Екипи</button>
+          <button class="nav__item" data-tab="calendar">Календар</button>
+          <button class="nav__item" data-tab="reports">Отчети</button>
+          <button class="nav__item" data-tab="settings">Настройки</button>
+        </nav>
+        <div class="sync">
+          <h3>Синхронизация</h3>
+          <p>Всички промени се записват локално и са готови за desktop версията.</p>
+          <div class="sync__status">
+            <span class="sync__dot"></span>
+            <span>Онлайн</span>
+          </div>
+        </div>
+      </aside>
+      <main class="main">
+        <header class="header">
+          <div>
+            <h1>Работно табло</h1>
+            <p>Организирай задачите си с един поглед.</p>
+          </div>
+          <div class="header__actions">
+            <button class="ghost" id="new-column">Нова колона</button>
+            <button class="ghost" id="open-settings">Настройки</button>
+            <button class="primary" id="new-board">Нова задача</button>
+          </div>
+        </header>
+
+        <section class="overview tab-panel tab-panel--active" data-tab-panel="boards">
+          <div class="stat">
+            <h4>Активни задачи</h4>
+            <p id="stat-active">0</p>
+          </div>
+          <div class="stat">
+            <h4>Екип</h4>
+            <p>6 човека</p>
+          </div>
+          <div class="stat">
+            <h4>Срокове тази седмица</h4>
+            <p id="stat-due">0</p>
+          </div>
+        </section>
+
+        <section class="board tab-panel tab-panel--active" id="board" data-tab-panel="boards"></section>
+
+        <section class="tab-panel" data-tab-panel="teams">
+          <div class="panel-card">
+            <h2>Екипи</h2>
+            <p>Създавай екипи, добавяй роли и проследявай натовареност.</p>
+            <div class="panel-grid">
+              <div class="panel-tile">
+                <h3>Продуктов екип</h3>
+                <p>Дизайн, UX, продуктови цели и експерименти.</p>
+              </div>
+              <div class="panel-tile">
+                <h3>Инженерен екип</h3>
+                <p>Спринтове, код ревюта и релийз планиране.</p>
+              </div>
+              <div class="panel-tile">
+                <h3>Маркетинг</h3>
+                <p>Кампании, съдържание и анализи.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-panel" data-tab-panel="calendar">
+          <div class="panel-card">
+            <h2>Календар</h2>
+            <p>Визуализирай срокове и ключови събития за седмицата.</p>
+            <div class="calendar-grid">
+              <div class="calendar-day">
+                <h4>Пон</h4>
+                <span>Планиране на седмицата</span>
+              </div>
+              <div class="calendar-day">
+                <h4>Вт</h4>
+                <span>Демо на прототип</span>
+              </div>
+              <div class="calendar-day">
+                <h4>Ср</h4>
+                <span>Екипен синк</span>
+              </div>
+              <div class="calendar-day">
+                <h4>Чт</h4>
+                <span>QA и тестове</span>
+              </div>
+              <div class="calendar-day">
+                <h4>Пет</h4>
+                <span>Release</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-panel" data-tab-panel="reports">
+          <div class="panel-card">
+            <h2>Отчети</h2>
+            <p>Проследявай прогрес и вижай трендове по екипи и проекти.</p>
+            <div class="reports-grid">
+              <div class="report-tile">
+                <h3>Завършени задачи</h3>
+                <div class="report-bar"><span></span></div>
+              </div>
+              <div class="report-tile">
+                <h3>Активни проекти</h3>
+                <div class="report-bar report-bar--alt"><span></span></div>
+              </div>
+              <div class="report-tile">
+                <h3>Скорост на екипа</h3>
+                <div class="report-bar report-bar--third"><span></span></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-panel" data-tab-panel="settings">
+          <div class="panel-card">
+            <h2>Настройки</h2>
+            <p>Персонализирай цветовете и предпочитанията на таблото.</p>
+            <div class="settings-grid">
+              <div class="setting-item">
+                <h4>Акцентен цвят</h4>
+                <p>Избери основен акцент за интерфейса.</p>
+                <div class="color-options">
+                  <button type="button" class="color-swatch" data-color="#5b6bff"></button>
+                  <button type="button" class="color-swatch" data-color="#2bb8a1"></button>
+                  <button type="button" class="color-swatch" data-color="#f8b259"></button>
+                  <button type="button" class="color-swatch" data-color="#ff7a7a"></button>
+                  <button type="button" class="color-swatch" data-color="#6dd3ff"></button>
+                </div>
+              </div>
+              <div class="setting-item">
+                <h4>Плътност</h4>
+                <p>Избери компактна или комфортна визия.</p>
+                <div class="density-toggle">
+                  <button type="button" class="ghost density-button" data-density="comfortable">Комфортно</button>
+                  <button type="button" class="ghost density-button" data-density="compact">Компактно</button>
+                </div>
+              </div>
+              <div class="setting-item">
+                <h4>Синхронизация</h4>
+                <p>Локално съхранение и готовност за desktop.</p>
+                <div class="sync__status">
+                  <span class="sync__dot"></span>
+                  <span>Активна</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="modal" id="modal">
+      <div class="modal__card">
+        <h2>Нова задача</h2>
+        <form id="task-form">
+          <label>
+            Заглавие
+            <input type="text" name="title" placeholder="Напр. UX преглед" required />
+          </label>
+          <label>
+            Описание
+            <textarea name="description" rows="3" placeholder="Какво трябва да бъде направено?"></textarea>
+          </label>
+          <label>
+            Срок
+            <input type="date" name="due" />
+          </label>
+          <label>
+            Колона
+            <select name="column">
+              <option value="backlog">Backlog</option>
+              <option value="progress">В процес</option>
+              <option value="review">Преглед</option>
+              <option value="done">Готово</option>
+            </select>
+          </label>
+          <div class="modal__actions">
+            <button type="button" class="ghost" id="close-modal">Отказ</button>
+            <button type="submit" class="primary">Добави</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

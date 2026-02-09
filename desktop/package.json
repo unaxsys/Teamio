@@ -1,0 +1,12 @@
+{
+  "name": "teamio-desktop",
+  "version": "0.1.0",
+  "description": "Teamio desktop shell",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^30.0.0"
+  }
+}
