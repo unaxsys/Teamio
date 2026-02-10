@@ -376,6 +376,12 @@ const saveResetTokens = (tokens) => {
 
 const loadResetTokens = () => JSON.parse(localStorage.getItem("teamio-reset-tokens") ?? "[]");
 
+const saveVerificationTokens = (tokens) => {
+  localStorage.setItem("teamio-verification-tokens", JSON.stringify(tokens));
+};
+
+const loadVerificationTokens = () => JSON.parse(localStorage.getItem("teamio-verification-tokens") ?? "[]");
+
 const setAuthMessage = (message) => {
   authMessage.textContent = message;
 };
@@ -457,6 +463,11 @@ const handleLogin = async (email, password) => {
     return;
   }
 
+  if (user.isEmailVerified === false) {
+    setAuthMessage("Потвърди имейла си преди вход.");
+    return;
+  }
+
   if (user.password === normalizedPassword) {
     user.password = hashed;
     saveUsers(users);
@@ -488,10 +499,9 @@ const handleRegister = async (name, email, password, companyName) => {
     }),
   });
 
-  if (apiResult?.ok && apiResult.data?.user) {
-    setCurrentUser(apiResult.data.user);
-    setAuthMessage("");
-    showApp(apiResult.data.user);
+  if (apiResult?.ok) {
+    setAuthMessage("Регистрацията е успешна. Провери имейла си и потвърди акаунта преди вход.");
+    activateAuthForm("login");
     return;
   }
 
@@ -519,6 +529,7 @@ const handleRegister = async (name, email, password, companyName) => {
     password: hashed,
     role: "Собственик",
     accountId,
+    isEmailVerified: false,
   };
 
   const updatedAccounts = loadAccounts().map((account) =>
@@ -528,9 +539,12 @@ const handleRegister = async (name, email, password, companyName) => {
 
   const updated = [...users, newUser];
   saveUsers(updated);
-  setCurrentUser(newUser);
-  setAuthMessage("");
-  showApp(newUser);
+  const verificationToken = generateToken();
+  const verificationTokens = loadVerificationTokens();
+  verificationTokens.push({ token: verificationToken, userId: newUserId, email: normalizedEmail, expiresAt: Date.now() + 24 * 60 * 60 * 1000, usedAt: null });
+  saveVerificationTokens(verificationTokens);
+  setAuthMessage("Регистрацията е успешна. Потвърди имейла си, за да влезеш.");
+  activateAuthForm("login");
 };
 
 const openModal = (modal) => {
@@ -576,16 +590,54 @@ const requestPasswordReset = async (email) => {
 
 const clearSensitiveQueryParams = () => {
   const url = new URL(window.location.href);
-  const hadEmail = url.searchParams.has("email");
-  const hadPassword = url.searchParams.has("password");
+  const sensitiveParams = ["email", "password", "verify", "reset"];
+  const hadSensitive = sensitiveParams.some((param) => url.searchParams.has(param));
 
-  if (!hadEmail && !hadPassword) {
+  if (!hadSensitive) {
     return;
   }
 
-  url.searchParams.delete("email");
-  url.searchParams.delete("password");
+  sensitiveParams.forEach((param) => url.searchParams.delete(param));
   window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+};
+
+const openVerifyFromUrl = async () => {
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get("verify");
+  if (!token) {
+    return;
+  }
+
+  const apiResult = await apiRequest("/api/auth/verify-email", {
+    method: "POST",
+    body: JSON.stringify({ token }),
+  });
+
+  if (apiResult?.ok) {
+    setAuthMessage("Имейлът е потвърден. Влез в профила си.");
+    return;
+  }
+
+  const verificationTokens = loadVerificationTokens();
+  const tokenRecord = verificationTokens.find((item) => item.token === token);
+
+  if (!tokenRecord || tokenRecord.usedAt || tokenRecord.expiresAt < Date.now()) {
+    setAuthMessage(apiResult?.data?.message ?? "Линкът за потвърждение е невалиден или изтекъл.");
+    return;
+  }
+
+  const users = loadUsers();
+  const updatedUsers = users.map((user) =>
+    user.id === tokenRecord.userId || normalizeEmail(user.email) === normalizeEmail(tokenRecord.email)
+      ? { ...user, isEmailVerified: true }
+      : user
+  );
+  saveUsers(updatedUsers);
+  const updatedTokens = verificationTokens.map((item) =>
+    item.token === token ? { ...item, usedAt: Date.now() } : item
+  );
+  saveVerificationTokens(updatedTokens);
+  setAuthMessage("Имейлът е потвърден. Влез в профила си.");
 };
 
 const openResetFromUrl = () => {
@@ -1650,5 +1702,7 @@ if (activeUser) {
   showAuth();
 }
 
-clearSensitiveQueryParams();
-openResetFromUrl();
+openVerifyFromUrl().finally(() => {
+  openResetFromUrl();
+  clearSensitiveQueryParams();
+});

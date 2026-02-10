@@ -13,6 +13,14 @@ const normalizeText = (value = "") => value.trim();
 const readDb = async () => JSON.parse(await readFile(DB_PATH, "utf8"));
 const writeDb = async (db) => writeFile(DB_PATH, JSON.stringify(db, null, 2));
 
+const ensureDbShape = (db) => {
+  db.users ??= [];
+  db.resetTokens ??= [];
+  db.accounts ??= [];
+  db.verificationTokens ??= [];
+  return db;
+};
+
 const send = (res, statusCode, payload) => {
   res.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
@@ -53,8 +61,7 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    const db = await readDb();
-    db.accounts ??= [];
+    const db = ensureDbShape(await readDb());
     if (db.users.some((user) => normalizeEmail(user.email) === email)) {
       send(res, 409, { message: "Този имейл вече е регистриран." });
       return;
@@ -77,14 +84,67 @@ const server = createServer(async (req, res) => {
       email,
       password: hashPassword(password),
       accountId,
+      isEmailVerified: false,
     };
+
+    const verifyToken = randomBytes(24).toString("hex");
+    const verifyTokenHash = createHash("sha256").update(verifyToken).digest("hex");
+    db.verificationTokens.push({
+      tokenHash: verifyTokenHash,
+      userId: newUser.id,
+      email,
+      expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+      usedAt: null,
+    });
 
     db.users.push(newUser);
     await writeDb(db);
 
-    send(res, 201, {
-      user: { id: newUser.id, name: newUser.name, email: newUser.email, accountId: newUser.accountId },
-    });
+    const verificationLink = `http://localhost:${PORT}/?verify=${verifyToken}`;
+    console.log(`[Teamio] Verification линк за ${email}: ${verificationLink}`);
+
+    send(res, 201, { message: "Пратихме линк за потвърждение на имейла.", verificationLink });
+    return;
+  }
+
+  if (req.url === "/api/auth/verify-email" && req.method === "POST") {
+    const body = await readBody(req);
+    const token = normalizeText(body.token);
+    if (!token) {
+      send(res, 400, { message: "Невалиден линк за потвърждение." });
+      return;
+    }
+
+    const db = ensureDbShape(await readDb());
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    const tokenRecord = db.verificationTokens.find((item) => item.tokenHash === tokenHash);
+
+    if (!tokenRecord) {
+      send(res, 400, { message: "Линкът за потвърждение е невалиден." });
+      return;
+    }
+
+    if (tokenRecord.usedAt) {
+      send(res, 400, { message: "Този линк вече е използван." });
+      return;
+    }
+
+    if (tokenRecord.expiresAt < Date.now()) {
+      send(res, 400, { message: "Линкът за потвърждение е изтекъл." });
+      return;
+    }
+
+    db.users = db.users.map((user) =>
+      user.id === tokenRecord.userId || normalizeEmail(user.email) === normalizeEmail(tokenRecord.email)
+        ? { ...user, isEmailVerified: true }
+        : user
+    );
+    db.verificationTokens = db.verificationTokens.map((item) =>
+      item.tokenHash === tokenHash ? { ...item, usedAt: Date.now() } : item
+    );
+
+    await writeDb(db);
+    send(res, 200, { message: "Имейлът е потвърден успешно." });
     return;
   }
 
@@ -93,12 +153,17 @@ const server = createServer(async (req, res) => {
     const email = normalizeEmail(body.email);
     const password = normalizeText(body.password);
 
-    const db = await readDb();
+    const db = ensureDbShape(await readDb());
     const hashed = hashPassword(password);
     const user = db.users.find((item) => normalizeEmail(item.email) === email && item.password === hashed);
 
     if (!user) {
       send(res, 401, { message: "Невалидни данни. Провери имейла и паролата." });
+      return;
+    }
+
+    if (user.isEmailVerified === false) {
+      send(res, 403, { message: "Потвърди имейла си преди вход." });
       return;
     }
 
@@ -109,7 +174,7 @@ const server = createServer(async (req, res) => {
   if (req.url === "/api/auth/forgot-password" && req.method === "POST") {
     const body = await readBody(req);
     const email = normalizeEmail(body.email);
-    const db = await readDb();
+    const db = ensureDbShape(await readDb());
     const user = db.users.find((item) => normalizeEmail(item.email) === email);
 
     if (user) {
