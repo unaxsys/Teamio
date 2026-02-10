@@ -2,6 +2,9 @@
 
 Teamio is a lightweight Trello/ClickUp-inspired workspace for the browser with a companion desktop shell. It focuses on a friendly, clean interface with quick task creation, drag-and-drop boards, and local-first persistence.
 
+## Product spec (BG)
+Подробната MVP спецификация е в `docs/mvp-spec-bg.md`.
+
 ## Structure
 - `web/` – static web app (HTML/CSS/JS) for the kanban experience.
 - `desktop/` – Electron shell that loads the web app for a synced desktop experience.
