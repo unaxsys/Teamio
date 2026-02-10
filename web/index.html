@@ -290,12 +290,29 @@
                 </div>
               </div>
               <div class="setting-item">
-                <h4>Синхронизация</h4>
-                <p>Локално съхранение и готовност за desktop.</p>
-                <div class="sync__status">
-                  <span class="sync__dot"></span>
-                  <span>Активна</span>
-                </div>
+                <h4>Календар и отчети</h4>
+                <p>Контролирай началния ден, уикенд оцветяване и критерия за завършени задачи.</p>
+                <label>
+                  Начален ден на седмицата
+                  <select id="week-start-day">
+                    <option value="monday">Понеделник</option>
+                    <option value="sunday">Неделя</option>
+                    <option value="saturday">Събота</option>
+                  </select>
+                </label>
+                <label class="setting-check">
+                  <input type="checkbox" id="setting-highlight-weekend" checked />
+                  Оцветявай събота и неделя различно
+                </label>
+                <label class="setting-check">
+                  <input type="checkbox" id="setting-done-by-column" checked />
+                  Завършена задача, ако е в колона „Готово“
+                </label>
+                <label class="setting-check">
+                  <input type="checkbox" id="setting-done-by-flag" />
+                  Завършена задача, ако е маркирана в детайлите
+                </label>
+                <p class="panel-list__meta" id="done-criteria-help"></p>
               </div>
             </div>
           </div>
@@ -345,6 +362,53 @@
             <button type="submit" class="primary">Добави</button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <div class="modal" id="task-details-modal">
+      <div class="modal__card modal__card--wide">
+        <h2>Детайли за задача</h2>
+        <form id="task-details-form">
+          <input type="hidden" name="taskId" />
+          <label>
+            Заглавие
+            <input type="text" name="title" required />
+          </label>
+          <label>
+            Описание
+            <textarea name="description" rows="8"></textarea>
+          </label>
+          <label>
+            Срок
+            <input type="date" name="due" />
+          </label>
+          <label>
+            Ниво
+            <select name="level">
+              <option value="L1">L1 – Стратегическо</option>
+              <option value="L2">L2 – Оперативно</option>
+              <option value="L3">L3 – Детайлно</option>
+            </select>
+          </label>
+          <label class="setting-check">
+            <input type="checkbox" name="completed" />
+            Маркирай като завършена
+          </label>
+          <div class="modal__actions">
+            <button type="button" class="ghost" id="close-task-details">Затвори</button>
+            <button type="submit" class="primary">Запази</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal" id="group-members-modal">
+      <div class="modal__card">
+        <h2 id="group-members-title">Членове на група</h2>
+        <div class="panel-list" id="group-members-list"></div>
+        <div class="modal__actions">
+          <button type="button" class="ghost" id="close-group-members">Затвори</button>
+        </div>
       </div>
     </div>
 

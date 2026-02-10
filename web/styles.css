@@ -601,6 +601,17 @@ body {
   padding: 16px;
 }
 
+.panel-tile--button {
+  border: none;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.panel-tile--button:hover {
+  transform: translateY(-1px);
+}
+
 .panel-tile:nth-child(2) {
   background: linear-gradient(145deg, rgba(35, 182, 200, 0.15), rgba(255, 255, 255, 0.9));
 }
@@ -625,6 +636,15 @@ body {
 
 .calendar-day:nth-child(odd) {
   background: linear-gradient(145deg, rgba(91, 107, 255, 0.15), rgba(255, 255, 255, 0.9));
+}
+
+
+.calendar-day--weekend {
+  background: linear-gradient(145deg, rgba(255, 122, 122, 0.18), rgba(255, 255, 255, 0.95));
+}
+
+.calendar-day--muted {
+  opacity: 0.58;
 }
 
 .reports-grid {
@@ -684,6 +704,19 @@ body {
   border-radius: 16px;
   padding: 16px;
   border: 1px solid var(--border);
+}
+
+.setting-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+  font-weight: 500;
+}
+
+.setting-check input {
+  width: 16px;
+  height: 16px;
 }
 
 .color-options {
@@ -826,12 +859,21 @@ body {
 .card__title {
   font-weight: 600;
   font-size: 14px;
+  overflow-wrap: anywhere;
 }
 
 .card__desc {
   margin: 0;
   color: var(--muted);
   font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.card__desc--clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .card__footer {
@@ -839,6 +881,8 @@ body {
   justify-content: space-between;
   font-size: 11px;
   color: var(--muted);
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .card__tag {
@@ -846,6 +890,8 @@ body {
   color: var(--primary-dark);
   padding: 2px 8px;
   border-radius: 999px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .modal {
@@ -867,6 +913,15 @@ body {
   border-radius: 20px;
   padding: 24px;
   width: min(420px, 100%);
+}
+
+.modal__card--wide {
+  width: min(720px, 100%);
+}
+
+#task-details-form textarea {
+  min-height: 180px;
+  resize: vertical;
 }
 
 .modal__card h2 {
