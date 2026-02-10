@@ -57,6 +57,10 @@
             <input type="email" name="email" placeholder="team@company.com" required />
           </label>
           <label>
+            Фирма
+            <input type="text" name="companyName" placeholder="Пример: Teamio OOD" required />
+          </label>
+          <label>
             Парола
             <input type="password" name="password" placeholder="Минимум 6 символа" minlength="6" required />
           </label>
@@ -152,8 +156,8 @@
             <p id="stat-active">0</p>
           </div>
           <div class="stat">
-            <h4>Екип</h4>
-            <p>6 човека</p>
+            <h4>Хора във фирмата</h4>
+            <p id="stat-team-size">0</p>
           </div>
           <div class="stat">
             <h4>Срокове тази седмица</h4>
@@ -162,35 +166,28 @@
         </section>
 
         <section class="board tab-panel tab-panel--active" id="board" data-tab-panel="boards"></section>
+        <section class="panel-card tab-panel tab-panel--active" data-tab-panel="boards">
+          <h3>Филтър по екипи</h3>
+          <p>Избери 2, 3 или n екипа, за да обединиш задачите им.</p>
+          <select id="board-team-filter" multiple></select>
+        </section>
 
         <section class="tab-panel" data-tab-panel="teams">
           <div class="panel-card">
             <h2>Екипи</h2>
-            <p>Създавай екипи, добавяй роли и проследявай натовареност.</p>
-            <form class="panel-form" id="team-form">
-              <label>
-                Име
-                <input type="text" name="name" placeholder="Име и фамилия" required />
-              </label>
-              <label>
-                Роля
-                <input type="text" name="role" placeholder="Продукт, QA, Дизайн" required />
-              </label>
-              <button type="submit" class="primary panel-form__submit">Добави човек</button>
-            </form>
-            <div class="panel-list" id="team-list"></div>
-            <div class="panel-grid">
-              <div class="panel-tile">
-                <h3>Продуктов екип</h3>
-                <p>Дизайн, UX, продуктови цели и експерименти.</p>
+            <p>Създавай екипи, добавяй хора в 1 или няколко екипа и отделяй задачите по екипи.</p>
+            <div class="teams-toolbar">
+              <button type="button" class="ghost" id="open-team-create-modal">Добави екип</button>
+              <button type="button" class="primary" id="open-member-create-modal">Добави човек</button>
+            </div>
+            <div class="teams-grid">
+              <div>
+                <h3 class="teams-subtitle">Хора</h3>
+                <div class="panel-list" id="team-list"></div>
               </div>
-              <div class="panel-tile">
-                <h3>Инженерен екип</h3>
-                <p>Спринтове, код ревюта и релийз планиране.</p>
-              </div>
-              <div class="panel-tile">
-                <h3>Маркетинг</h3>
-                <p>Кампании, съдържание и анализи.</p>
+              <div>
+                <h3 class="teams-subtitle">Екипи</h3>
+                <div class="panel-list" id="team-catalog"></div>
               </div>
             </div>
           </div>
@@ -329,8 +326,53 @@
               <option value="L3">L3 – Детайлно</option>
             </select>
           </label>
+          <label>
+            Екипи
+            <select name="teamIds" id="task-team-ids" multiple required></select>
+          </label>
           <div class="modal__actions">
             <button type="button" class="ghost" id="close-modal">Отказ</button>
+            <button type="submit" class="primary">Добави</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal" id="team-create-modal">
+      <div class="modal__card modal__card--wide">
+        <h2>Добави екип</h2>
+        <form id="team-create-form">
+          <label>
+            Име на екипа
+            <input type="text" name="teamName" placeholder="Продуктов екип" required />
+          </label>
+          <div class="modal__actions">
+            <button type="button" class="ghost" id="close-team-create-modal">Отказ</button>
+            <button type="submit" class="primary">Запази</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal" id="member-create-modal">
+      <div class="modal__card modal__card--wide">
+        <h2>Добави човек</h2>
+        <form class="panel-form" id="team-form">
+          <input type="hidden" name="memberId" />
+          <label>
+            Име
+            <input type="text" name="name" placeholder="Име и фамилия" required />
+          </label>
+          <label>
+            Роля
+            <input type="text" name="role" placeholder="Продукт, QA, Дизайн" required />
+          </label>
+          <label>
+            Екипи
+            <select name="teamIds" id="member-team-ids" multiple required></select>
+          </label>
+          <div class="modal__actions modal__actions--full">
+            <button type="button" class="ghost" id="close-member-create-modal">Отказ</button>
             <button type="submit" class="primary">Добави</button>
           </div>
         </form>
