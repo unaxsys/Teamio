@@ -491,15 +491,18 @@ const loadTheme = () => {
 };
 
 const applyDensity = (mode) => {
-  document.body.classList.toggle("density-compact", mode === "compact");
-  localStorage.setItem("teamio-density", mode);
+  const normalizedMode = mode === "compact" ? "compact" : "comfortable";
+  document.body.classList.toggle("density-compact", normalizedMode === "compact");
+  document.body.classList.toggle("density-comfortable", normalizedMode === "comfortable");
+  densityButtons.forEach((button) => {
+    button.classList.toggle("density-button--active", button.dataset.density === normalizedMode);
+  });
+  localStorage.setItem("teamio-density", normalizedMode);
 };
 
 const loadDensity = () => {
-  const saved = localStorage.getItem("teamio-density");
-  if (saved) {
-    applyDensity(saved);
-  }
+  const saved = localStorage.getItem("teamio-density") ?? "comfortable";
+  applyDensity(saved);
 };
 
 const loadTasks = () => {

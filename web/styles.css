@@ -518,8 +518,14 @@ body {
 
 .panel-form__submit {
   min-height: 42px;
-  width: 100%;
-  align-self: end;
+  justify-self: start;
+  width: auto;
+}
+
+#member-team-ids,
+#task-team-ids,
+#board-team-filter {
+  min-height: 110px;
 }
 
 .calendar-toolbar {
@@ -754,13 +760,76 @@ body {
   margin-top: 10px;
 }
 
+.density-button--active {
+  border-color: var(--primary);
+  color: var(--primary-dark);
+  background: rgba(91, 107, 255, 0.1);
+}
+
+.density-comfortable .main {
+  padding: 32px 40px 48px;
+}
+
+.density-comfortable .panel-card {
+  padding: 24px;
+}
+
+.density-compact .main {
+  padding: 22px 28px 30px;
+}
+
+.density-compact .header h1 {
+  font-size: 24px;
+}
+
+.density-compact .overview {
+  margin: 14px 0 20px;
+  gap: 12px;
+}
+
+.density-compact .stat {
+  padding: 12px;
+}
+
+.density-compact .stat p {
+  font-size: 18px;
+}
+
+.density-compact .panel-card {
+  padding: 16px;
+  border-radius: 14px;
+}
+
+.density-compact .panel-form {
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.density-compact label {
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.density-compact input,
+.density-compact textarea,
+.density-compact select {
+  padding: 8px;
+}
+
+.density-compact .column {
+  padding: 12px;
+  flex-basis: 250px;
+  min-height: 280px;
+}
+
 .density-compact .card {
   padding: 10px;
   gap: 6px;
 }
 
-.density-compact .column {
-  padding: 12px;
+.density-compact .calendar-day {
+  padding: 10px;
+  min-height: 92px;
 }
 
 .card__title-row {
