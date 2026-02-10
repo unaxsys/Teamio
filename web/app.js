@@ -306,6 +306,40 @@ const normalizeEmail = (email) => email.trim().toLowerCase();
 
 const normalizeText = (value) => value.trim();
 
+const hasManagementAccess = () => {
+  const currentUser = loadCurrentUser();
+  const account = getCurrentAccount();
+  if (!currentUser) {
+    return false;
+  }
+
+  if (account?.ownerUserId && account.ownerUserId === currentUser.id) {
+    return true;
+  }
+
+  const role = normalizeText(currentUser.role ?? "").toLowerCase();
+  return ["admin", "owner", "администратор", "собственик"].some((keyword) => role.includes(keyword));
+};
+
+const applyManagementAccessUi = () => {
+  const hasAccess = hasManagementAccess();
+
+  if (openTeamCreateModalButton) {
+    openTeamCreateModalButton.disabled = !hasAccess;
+    openTeamCreateModalButton.title = hasAccess ? "" : "Само администратор/собственик може да добавя екипи.";
+  }
+
+  if (openMemberCreateModalButton) {
+    openMemberCreateModalButton.disabled = !hasAccess;
+    openMemberCreateModalButton.title = hasAccess ? "" : "Само администратор/собственик може да добавя хора.";
+  }
+
+  if (boardTeamFilter) {
+    boardTeamFilter.disabled = !hasAccess;
+    boardTeamFilter.title = hasAccess ? "" : "Само администратор/собственик може да определя филтъра.";
+  }
+};
+
 const loadApiBase = () => localStorage.getItem("teamio-api-base") ?? "";
 
 const apiRequest = async (path, options = {}) => {
@@ -375,6 +409,7 @@ const showApp = (user) => {
   authScreenEl.style.display = "none";
   appEl.classList.remove("app--hidden");
   updateProfile(normalizedUser);
+  applyManagementAccessUi();
   syncTeamSelectors();
   renderBoard(getVisibleTasks());
   renderTeams();
@@ -472,17 +507,25 @@ const handleRegister = async (name, email, password, companyName) => {
     { id: `team-${Date.now()}-1`, name: "Продуктов екип" },
     { id: `team-${Date.now()}-2`, name: "Инженерен екип" },
   ];
-  accounts.push({ id: accountId, name: normalizedCompanyName, teams: defaultTeams, members: [] });
+  accounts.push({ id: accountId, name: normalizedCompanyName, ownerUserId: `user-${Date.now()}`, teams: defaultTeams, members: [] });
   saveAccounts(accounts);
 
+  const newUserId = `user-${Date.now()}`;
   const hashed = await hashPassword(normalizedPassword);
   const newUser = {
-    id: `user-${Date.now()}`,
+    id: newUserId,
     name: normalizedName,
     email: normalizedEmail,
     password: hashed,
+    role: "Собственик",
     accountId,
   };
+
+  const updatedAccounts = loadAccounts().map((account) =>
+    account.id === accountId ? { ...account, ownerUserId: newUserId } : account
+  );
+  saveAccounts(updatedAccounts);
+
   const updated = [...users, newUser];
   saveUsers(updated);
   setCurrentUser(newUser);
@@ -833,6 +876,7 @@ const openGroupMembers = (groupId) => {
 };
 
 const renderTeams = () => {
+  const canManage = hasManagementAccess();
   const account = getCurrentAccount();
   const members = account?.members ?? [];
   const teams = account?.teams ?? [];
@@ -873,7 +917,12 @@ const renderTeams = () => {
     remove.type = "button";
     remove.className = "panel-list__remove";
     remove.textContent = "Премахни";
+    remove.disabled = !canManage;
+    remove.title = canManage ? "" : "Само администратор/собственик може да премахва хора.";
     remove.addEventListener("click", () => {
+      if (!canManage) {
+        return;
+      }
       const accounts = loadAccounts().map((entry) =>
         entry.id === account.id
           ? { ...entry, members: (entry.members ?? []).filter((current) => current.id !== member.id) }
@@ -906,6 +955,9 @@ const renderTeams = () => {
       teamCard.innerHTML = `<div><strong>${team.name}</strong><div class="panel-list__meta">${count} човека</div><div class="panel-list__meta">Пусни човек тук</div></div>`;
 
       teamCard.addEventListener("dragover", (event) => {
+        if (!canManage) {
+          return;
+        }
         if (!event.dataTransfer.types.includes("application/x-teamio-member")) {
           return;
         }
@@ -918,6 +970,9 @@ const renderTeams = () => {
       });
 
       teamCard.addEventListener("drop", (event) => {
+        if (!canManage) {
+          return;
+        }
         event.preventDefault();
         teamCard.classList.remove("panel-list__item--drop-target");
         const memberId = event.dataTransfer.getData("application/x-teamio-member");
@@ -1159,11 +1214,17 @@ registerForm.addEventListener("submit", async (event) => {
 });
 
 openTeamCreateModalButton?.addEventListener("click", () => {
+  if (!hasManagementAccess()) {
+    return;
+  }
   teamCreateForm?.reset();
   openModal(teamCreateModal);
 });
 
 openMemberCreateModalButton?.addEventListener("click", () => {
+  if (!hasManagementAccess()) {
+    return;
+  }
   syncTeamSelectors();
   teamForm?.reset();
   openModal(memberCreateModal);
@@ -1191,6 +1252,9 @@ memberCreateModal?.addEventListener("click", (event) => {
 
 teamCreateForm?.addEventListener("submit", (event) => {
   event.preventDefault();
+  if (!hasManagementAccess()) {
+    return;
+  }
   const formData = new FormData(teamCreateForm);
   const teamName = normalizeText(formData.get("teamName")?.toString() ?? "");
   if (!teamName) {
@@ -1220,6 +1284,9 @@ teamCreateForm?.addEventListener("submit", (event) => {
 
 teamForm?.addEventListener("submit", (event) => {
   event.preventDefault();
+  if (!hasManagementAccess()) {
+    return;
+  }
   const account = getCurrentAccount();
   if (!account) {
     return;
@@ -1562,6 +1629,9 @@ formEl.addEventListener("submit", (event) => {
 });
 
 boardTeamFilter?.addEventListener("change", () => {
+  if (!hasManagementAccess()) {
+    return;
+  }
   renderBoard(getVisibleTasks());
 });
 
