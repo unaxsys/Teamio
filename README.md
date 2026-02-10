@@ -10,6 +10,26 @@ Teamio is a lightweight Trello/ClickUp-inspired workspace for the browser with a
 ### Web
 Open `web/index.html` directly in a browser, or serve it with any static server.
 
+### API server (file DB for auth)
+For persistent login/registration data in a real file, run the backend:
+
+```
+cd server
+npm start
+```
+
+This creates/uses `server/db.json` as the auth database.
+
+By default the web app still works in local demo mode.
+To connect the UI to the API server, open browser console and set:
+
+```js
+localStorage.setItem("teamio-api-base", "http://localhost:8787")
+location.reload()
+```
+
+> GitHub Pages is static hosting, so real email delivery and file-based DB writes are not possible there without an external backend service.
+
 ### Desktop
 ```
 cd desktop

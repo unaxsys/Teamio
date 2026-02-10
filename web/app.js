@@ -112,6 +112,32 @@ const saveCalendar = (items) => {
   localStorage.setItem("teamio-calendar", JSON.stringify(items));
 };
 
+const normalizeEmail = (email) => email.trim().toLowerCase();
+
+const normalizeText = (value) => value.trim();
+
+const loadApiBase = () => localStorage.getItem("teamio-api-base") ?? "";
+
+const apiRequest = async (path, options = {}) => {
+  const base = loadApiBase();
+  if (!base) {
+    return null;
+  }
+  try {
+    const response = await fetch(`${base}${path}`, {
+      headers: { "Content-Type": "application/json", ...(options.headers ?? {}) },
+      ...options,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      return { ok: false, data };
+    }
+    return { ok: true, data };
+  } catch (error) {
+    return { ok: false, data: { message: "Сървърът не е достъпен." } };
+  }
+};
+
 const hashPassword = async (password) => {
   const data = new TextEncoder().encode(password);
   const hashBuffer = await crypto.subtle.digest("SHA-256", data);
@@ -166,6 +192,20 @@ const showAuth = () => {
 };
 
 const handleLogin = async (email, password) => {
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedPassword = normalizeText(password);
+  const apiResult = await apiRequest("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email: normalizedEmail, password: normalizedPassword }),
+  });
+
+  if (apiResult?.ok && apiResult.data?.user) {
+    setCurrentUser(apiResult.data.user);
+    setAuthMessage("");
+    showApp(apiResult.data.user);
+    return;
+  }
+
   const users = loadUsers();
   if (users.length === 0) {
     setAuthMessage("Нямаш акаунт. Регистрирай се, за да влезеш.");
@@ -176,25 +216,57 @@ const handleLogin = async (email, password) => {
     );
     return;
   }
-  const hashed = await hashPassword(password);
-  const user = users.find((item) => item.email === email && item.password === hashed);
+
+  const hashed = await hashPassword(normalizedPassword);
+  const user = users.find(
+    (item) => normalizeEmail(item.email) === normalizedEmail && (item.password === hashed || item.password === normalizedPassword)
+  );
+
   if (!user) {
-    setAuthMessage("Невалидни данни. Провери имейла и паролата.");
+    setAuthMessage(apiResult?.data?.message ?? "Невалидни данни. Провери имейла и паролата.");
     return;
   }
+
+  if (user.password === normalizedPassword) {
+    user.password = hashed;
+    saveUsers(users);
+  }
+
   setCurrentUser(user);
   setAuthMessage("");
   showApp(user);
 };
 
 const handleRegister = async (name, email, password) => {
-  const users = loadUsers();
-  if (users.some((item) => item.email === email)) {
-    setAuthMessage("Този имейл вече е регистриран.");
+  const normalizedName = normalizeText(name);
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedPassword = normalizeText(password);
+
+  if (!normalizedName || !normalizedEmail || normalizedPassword.length < 6) {
+    setAuthMessage("Попълни коректно всички полета.");
     return;
   }
-  const hashed = await hashPassword(password);
-  const newUser = { id: `user-${Date.now()}`, name, email, password: hashed };
+
+  const apiResult = await apiRequest("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ name: normalizedName, email: normalizedEmail, password: normalizedPassword }),
+  });
+
+  if (apiResult?.ok && apiResult.data?.user) {
+    setCurrentUser(apiResult.data.user);
+    setAuthMessage("");
+    showApp(apiResult.data.user);
+    return;
+  }
+
+  const users = loadUsers();
+  if (users.some((item) => normalizeEmail(item.email) === normalizedEmail)) {
+    setAuthMessage(apiResult?.data?.message ?? "Този имейл вече е регистриран.");
+    return;
+  }
+
+  const hashed = await hashPassword(normalizedPassword);
+  const newUser = { id: `user-${Date.now()}`, name: normalizedName, email: normalizedEmail, password: hashed };
   const updated = [...users, newUser];
   saveUsers(updated);
   setCurrentUser(newUser);
@@ -218,18 +290,29 @@ const generateToken = () => {
     .join("");
 };
 
-const requestPasswordReset = (email) => {
+const requestPasswordReset = async (email) => {
+  const normalizedEmail = normalizeEmail(email);
+  const apiResult = await apiRequest("/api/auth/forgot-password", {
+    method: "POST",
+    body: JSON.stringify({ email: normalizedEmail }),
+  });
+
+  if (apiResult?.ok) {
+    resetLinkEl.textContent = "Ако имейлът съществува, изпратихме линк за смяна на парола.";
+    return;
+  }
+
   const users = loadUsers();
-  const user = users.find((item) => item.email === email);
+  const user = users.find((item) => normalizeEmail(item.email) === normalizedEmail);
   if (!user) {
-    resetLinkEl.textContent = "Няма потребител с този имейл.";
+    resetLinkEl.textContent = "Ако имейлът съществува, изпратихме линк за смяна на парола.";
     return;
   }
   const tokens = loadResetTokens();
   const token = generateToken();
-  tokens.push({ token, email, createdAt: Date.now() });
+  tokens.push({ token, email: normalizedEmail, createdAt: Date.now() });
   saveResetTokens(tokens);
-  resetLinkEl.textContent = `Линк за смяна на парола (демо): ${window.location.origin}${window.location.pathname}?reset=${token}`;
+  resetLinkEl.textContent = "Линкът за смяна е генериран в демо режим (без реално изпращане на имейл).";
 };
 
 const openResetFromUrl = () => {
@@ -575,16 +658,28 @@ newPasswordForm.addEventListener("submit", async (event) => {
   const formData = new FormData(newPasswordForm);
   const token = formData.get("token").toString();
   const newPassword = formData.get("password").toString();
+
+  const apiResult = await apiRequest("/api/auth/reset-password", {
+    method: "POST",
+    body: JSON.stringify({ token, password: newPassword }),
+  });
+
+  if (apiResult?.ok) {
+    closeModal(newPasswordModal);
+    setAuthMessage("Паролата е обновена. Можеш да влезеш.");
+    return;
+  }
+
   const tokens = loadResetTokens();
   const tokenRecord = tokens.find((item) => item.token === token);
   if (!tokenRecord) {
-    setAuthMessage("Линкът за възстановяване е невалиден.");
+    setAuthMessage(apiResult?.data?.message ?? "Линкът за възстановяване е невалиден.");
     return;
   }
   const users = loadUsers();
   const updatedUsers = await Promise.all(
     users.map(async (user) => {
-      if (user.email !== tokenRecord.email) {
+      if (normalizeEmail(user.email) !== normalizeEmail(tokenRecord.email)) {
         return user;
       }
       return { ...user, password: await hashPassword(newPassword) };

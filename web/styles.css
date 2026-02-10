@@ -87,6 +87,16 @@ body {
   display: flex;
 }
 
+
+.auth-form .primary,
+.auth-form .ghost,
+.auth-form .link-button {
+  width: 100%;
+}
+
+.auth-form .link-button {
+  text-align: center;
+}
 .auth-note {
   margin: 0;
   font-size: 12px;
@@ -462,6 +472,10 @@ body {
 
 .tab-panel--active {
   display: block;
+}
+
+.board.tab-panel--active {
+  display: flex;
 }
 
 .panel-card {
