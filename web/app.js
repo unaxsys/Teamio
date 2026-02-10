@@ -55,6 +55,21 @@ const reportDone = document.getElementById("report-done");
 const reportActive = document.getElementById("report-active");
 const reportVelocity = document.getElementById("report-velocity");
 
+const taskDetailsModal = document.getElementById("task-details-modal");
+const taskDetailsForm = document.getElementById("task-details-form");
+const closeTaskDetailsButton = document.getElementById("close-task-details");
+const groupTiles = document.querySelectorAll(".panel-tile--button");
+const groupMembersModal = document.getElementById("group-members-modal");
+const groupMembersTitle = document.getElementById("group-members-title");
+const groupMembersList = document.getElementById("group-members-list");
+const closeGroupMembersButton = document.getElementById("close-group-members");
+const weekStartDaySelect = document.getElementById("week-start-day");
+const highlightWeekendCheckbox = document.getElementById("setting-highlight-weekend");
+const doneByColumnCheckbox = document.getElementById("setting-done-by-column");
+const doneByFlagCheckbox = document.getElementById("setting-done-by-flag");
+const doneCriteriaHelp = document.getElementById("done-criteria-help");
+
+
 const defaultColumns = [
   { id: "backlog", title: "Backlog", color: "#5b6bff" },
   { id: "progress", title: "В процес", color: "#2bb8a1" },
@@ -73,6 +88,7 @@ const defaultTasks = [
     column: "backlog",
     tag: "UX",
     level: "L1",
+    completed: false,
   },
   {
     id: "task-2",
@@ -82,6 +98,7 @@ const defaultTasks = [
     column: "progress",
     tag: "Екип",
     level: "L2",
+    completed: false,
   },
   {
     id: "task-3",
@@ -91,6 +108,7 @@ const defaultTasks = [
     column: "review",
     tag: "QA",
     level: "L3",
+    completed: false,
   },
   {
     id: "task-4",
@@ -100,6 +118,7 @@ const defaultTasks = [
     column: "done",
     tag: "Release",
     level: "L2",
+    completed: true,
   },
 ];
 
@@ -110,6 +129,33 @@ const calendarState = {
   view: localStorage.getItem("teamio-calendar-view") ?? "week",
   focusDate: localStorage.getItem("teamio-calendar-focus") ?? new Date().toISOString().slice(0, 10),
 };
+
+const groupLabels = {
+  product: "Продуктов екип",
+  engineering: "Инженерен екип",
+  marketing: "Маркетинг",
+};
+
+const loadPreferences = () => {
+  const defaults = {
+    weekStartDay: "monday",
+    highlightWeekend: true,
+    doneByColumn: true,
+    doneByFlag: false,
+  };
+  const stored = localStorage.getItem("teamio-preferences");
+  if (!stored) {
+    localStorage.setItem("teamio-preferences", JSON.stringify(defaults));
+    return defaults;
+  }
+  return { ...defaults, ...JSON.parse(stored) };
+};
+
+const savePreferences = (preferences) => {
+  localStorage.setItem("teamio-preferences", JSON.stringify(preferences));
+};
+
+let preferences = loadPreferences();
 
 const loadColumns = () => {
   const stored = localStorage.getItem("teamio-columns");
@@ -184,6 +230,56 @@ const ensureAccountForUser = (user) => {
   const nextUser = { ...user, accountId };
   setCurrentUser(nextUser);
   return nextUser;
+};
+
+const getSelectedValues = (selectEl) =>
+  Array.from(selectEl?.selectedOptions ?? [])
+    .map((option) => option.value)
+    .filter(Boolean);
+
+const syncTeamSelectors = () => {
+  const account = getCurrentAccount();
+  const teams = account?.teams ?? [];
+
+  [memberTeamIdsSelect, taskTeamIdsSelect, boardTeamFilter].forEach((selectEl) => {
+    if (!selectEl) {
+      return;
+    }
+    const selected = new Set(getSelectedValues(selectEl));
+    selectEl.innerHTML = "";
+    teams.forEach((team) => {
+      const option = document.createElement("option");
+      option.value = team.id;
+      option.textContent = team.name;
+      option.selected = selected.has(team.id);
+      selectEl.append(option);
+    });
+  });
+};
+
+const getVisibleTasks = () => {
+  const user = loadCurrentUser();
+  const allTasks = loadTasks();
+  const accountTasks = allTasks.filter((task) => !user?.accountId || task.accountId === user.accountId);
+  const selectedTeamIds = getSelectedValues(boardTeamFilter);
+  if (selectedTeamIds.length === 0) {
+    return accountTasks;
+  }
+  return accountTasks.filter((task) => (task.teamIds ?? []).some((teamId) => selectedTeamIds.includes(teamId)));
+};
+
+const loadAccounts = () => JSON.parse(localStorage.getItem("teamio-accounts") ?? "[]");
+
+const saveAccounts = (accounts) => {
+  localStorage.setItem("teamio-accounts", JSON.stringify(accounts));
+};
+
+const getCurrentAccount = () => {
+  const user = loadCurrentUser();
+  if (!user?.accountId) {
+    return null;
+  }
+  return loadAccounts().find((account) => account.id === user.accountId) ?? null;
 };
 
 const getSelectedValues = (selectEl) =>
@@ -504,7 +600,11 @@ const loadTasks = () => {
     localStorage.setItem("teamio-tasks", JSON.stringify(defaultTasks));
     return [...defaultTasks];
   }
-  return JSON.parse(stored);
+  return JSON.parse(stored).map((task) => ({
+    ...task,
+    level: task.level ?? "L2",
+    completed: Boolean(task.completed),
+  }));
 };
 
 const saveTasks = (tasks) => {
@@ -518,6 +618,22 @@ const openTaskModal = () => {
 const closeTaskModal = () => {
   modalEl.classList.remove("modal--open");
   formEl.reset();
+};
+
+const openTaskDetails = (taskId) => {
+  const tasks = loadTasks();
+  const task = tasks.find((entry) => entry.id === taskId);
+  if (!task || !taskDetailsForm) {
+    return;
+  }
+
+  taskDetailsForm.querySelector('input[name="taskId"]').value = task.id;
+  taskDetailsForm.querySelector('input[name="title"]').value = task.title;
+  taskDetailsForm.querySelector('textarea[name="description"]').value = task.description ?? "";
+  taskDetailsForm.querySelector('input[name="due"]').value = task.due ?? "";
+  taskDetailsForm.querySelector('select[name="level"]').value = task.level ?? "L2";
+  taskDetailsForm.querySelector('input[name="completed"]').checked = Boolean(task.completed);
+  openModal(taskDetailsModal);
 };
 
 const createCard = (task, columnColor) => {
@@ -543,8 +659,8 @@ const createCard = (task, columnColor) => {
   titleRow.append(title, levelBadge);
 
   const desc = document.createElement("p");
-  desc.className = "card__desc";
-  desc.textContent = task.description;
+  desc.className = "card__desc card__desc--clamp";
+  desc.textContent = task.description || "Без описание";
 
   const footer = document.createElement("div");
   footer.className = "card__footer";
@@ -561,6 +677,10 @@ const createCard = (task, columnColor) => {
 
   card.addEventListener("dragstart", (event) => {
     event.dataTransfer.setData("text/plain", task.id);
+  });
+
+  card.addEventListener("click", () => {
+    openTaskDetails(task.id);
   });
 
   return card;
@@ -697,6 +817,28 @@ const renderBoard = (tasks) => {
   updateReports();
 };
 
+const openGroupMembers = (groupId) => {
+  const members = loadTeams().filter((member) => (member.group ?? "product") === groupId);
+  groupMembersTitle.textContent = `${groupLabels[groupId] ?? "Екип"} – хора`;
+  groupMembersList.innerHTML = "";
+
+  if (members.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "panel-list__meta";
+    empty.textContent = "Няма добавени хора в тази група.";
+    groupMembersList.append(empty);
+  } else {
+    members.forEach((member) => {
+      const item = document.createElement("div");
+      item.className = "panel-list__item";
+      item.innerHTML = `<div><strong>${member.name}</strong><div class="panel-list__meta">${member.role}</div></div>`;
+      groupMembersList.append(item);
+    });
+  }
+
+  openModal(groupMembersModal);
+};
+
 const renderTeams = () => {
   const account = getCurrentAccount();
   const members = account?.members ?? [];
@@ -778,8 +920,10 @@ const formatDateOnly = (date) => {
 const startOfWeek = (date) => {
   const result = new Date(date);
   const day = result.getDay();
-  const offset = day === 0 ? -6 : 1 - day;
-  result.setDate(result.getDate() + offset);
+  const desiredStart =
+    preferences.weekStartDay === "sunday" ? 0 : preferences.weekStartDay === "saturday" ? 6 : 1;
+  const offset = (day - desiredStart + 7) % 7;
+  result.setDate(result.getDate() - offset);
   result.setHours(0, 0, 0, 0);
   return result;
 };
@@ -794,10 +938,12 @@ const renderCalendarGrid = (items) => {
   const days = [];
 
   if (calendarState.view === "month") {
-    const start = new Date(focus.getFullYear(), focus.getMonth(), 1);
-    const end = new Date(focus.getFullYear(), focus.getMonth() + 1, 0);
-    for (let date = new Date(start); date <= end; date.setDate(date.getDate() + 1)) {
-      days.push(new Date(date));
+    const monthStart = new Date(focus.getFullYear(), focus.getMonth(), 1);
+    const gridStart = startOfWeek(monthStart);
+    for (let i = 0; i < 42; i += 1) {
+      const date = new Date(gridStart);
+      date.setDate(gridStart.getDate() + i);
+      days.push(date);
     }
   } else {
     const weekStart = startOfWeek(focus);
@@ -821,6 +967,10 @@ const renderCalendarGrid = (items) => {
     const key = formatDateOnly(date);
     const dayEl = document.createElement("div");
     dayEl.className = "calendar-day";
+    const dayNumber = date.getDay();
+    if (preferences.highlightWeekend && (dayNumber === 0 || dayNumber === 6)) {
+      dayEl.classList.add("calendar-day--weekend");
+    }
 
     const label = document.createElement("span");
     label.className = "calendar-day__label";
@@ -829,6 +979,10 @@ const renderCalendarGrid = (items) => {
       day: "2-digit",
       month: "2-digit",
     });
+
+    if (calendarState.view === "month" && date.getMonth() !== focus.getMonth()) {
+      dayEl.classList.add("calendar-day--muted");
+    }
 
     dayEl.append(label);
 
@@ -1110,6 +1264,80 @@ calendarNextButton?.addEventListener("click", () => {
   renderCalendar();
 });
 
+if (weekStartDaySelect) {
+  weekStartDaySelect.value = preferences.weekStartDay;
+}
+if (highlightWeekendCheckbox) {
+  highlightWeekendCheckbox.checked = preferences.highlightWeekend;
+}
+if (doneByColumnCheckbox) {
+  doneByColumnCheckbox.checked = preferences.doneByColumn;
+}
+if (doneByFlagCheckbox) {
+  doneByFlagCheckbox.checked = preferences.doneByFlag;
+}
+
+weekStartDaySelect?.addEventListener("change", () => {
+  preferences.weekStartDay = weekStartDaySelect.value;
+  savePreferences(preferences);
+  renderCalendar();
+});
+
+highlightWeekendCheckbox?.addEventListener("change", () => {
+  preferences.highlightWeekend = highlightWeekendCheckbox.checked;
+  savePreferences(preferences);
+  renderCalendar();
+});
+
+doneByColumnCheckbox?.addEventListener("change", () => {
+  preferences.doneByColumn = doneByColumnCheckbox.checked;
+  savePreferences(preferences);
+  updateReports();
+});
+
+doneByFlagCheckbox?.addEventListener("change", () => {
+  preferences.doneByFlag = doneByFlagCheckbox.checked;
+  savePreferences(preferences);
+  updateReports();
+});
+
+groupTiles.forEach((tile) => {
+  tile.addEventListener("click", () => {
+    openGroupMembers(tile.dataset.group);
+  });
+});
+
+closeGroupMembersButton?.addEventListener("click", () => {
+  closeModal(groupMembersModal);
+});
+
+closeTaskDetailsButton?.addEventListener("click", () => {
+  closeModal(taskDetailsModal);
+});
+
+taskDetailsForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const formData = new FormData(taskDetailsForm);
+  const taskId = formData.get("taskId")?.toString();
+  const tasks = loadTasks();
+  const updatedTasks = tasks.map((task) =>
+    task.id === taskId
+      ? {
+          ...task,
+          title: formData.get("title")?.toString().trim() ?? task.title,
+          description: formData.get("description")?.toString() ?? "",
+          due: formData.get("due")?.toString() ?? "",
+          level: formData.get("level")?.toString() ?? "L2",
+          completed: formData.get("completed") === "on",
+        }
+      : task
+  );
+  saveTasks(updatedTasks);
+  renderBoard(updatedTasks);
+  updateReports();
+  closeModal(taskDetailsModal);
+});
+
 forgotPasswordButton.addEventListener("click", () => {
   resetLinkEl.textContent = "";
   resetRequestForm.reset();
@@ -1221,6 +1449,18 @@ resetModal.addEventListener("click", (event) => {
 newPasswordModal.addEventListener("click", (event) => {
   if (event.target === newPasswordModal) {
     closeModal(newPasswordModal);
+  }
+});
+
+taskDetailsModal?.addEventListener("click", (event) => {
+  if (event.target === taskDetailsModal) {
+    closeModal(taskDetailsModal);
+  }
+});
+
+groupMembersModal?.addEventListener("click", (event) => {
+  if (event.target === groupMembersModal) {
+    closeModal(groupMembersModal);
   }
 });
 

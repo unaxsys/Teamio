@@ -280,12 +280,29 @@
                 </div>
               </div>
               <div class="setting-item">
-                <h4>Синхронизация</h4>
-                <p>Локално съхранение и готовност за desktop.</p>
-                <div class="sync__status">
-                  <span class="sync__dot"></span>
-                  <span>Активна</span>
-                </div>
+                <h4>Календар и отчети</h4>
+                <p>Контролирай началния ден, уикенд оцветяване и критерия за завършени задачи.</p>
+                <label>
+                  Начален ден на седмицата
+                  <select id="week-start-day">
+                    <option value="monday">Понеделник</option>
+                    <option value="sunday">Неделя</option>
+                    <option value="saturday">Събота</option>
+                  </select>
+                </label>
+                <label class="setting-check">
+                  <input type="checkbox" id="setting-highlight-weekend" checked />
+                  Оцветявай събота и неделя различно
+                </label>
+                <label class="setting-check">
+                  <input type="checkbox" id="setting-done-by-column" checked />
+                  Завършена задача, ако е в колона „Готово“
+                </label>
+                <label class="setting-check">
+                  <input type="checkbox" id="setting-done-by-flag" />
+                  Завършена задача, ако е маркирана в детайлите
+                </label>
+                <p class="panel-list__meta" id="done-criteria-help"></p>
               </div>
             </div>
           </div>
