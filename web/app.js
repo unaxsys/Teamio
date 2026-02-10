@@ -67,6 +67,8 @@ const weekStartDaySelect = document.getElementById("week-start-day");
 const highlightWeekendCheckbox = document.getElementById("setting-highlight-weekend");
 const doneByColumnCheckbox = document.getElementById("setting-done-by-column");
 const doneByFlagCheckbox = document.getElementById("setting-done-by-flag");
+const showBoardFilterCheckbox = document.getElementById("setting-show-board-filter");
+const boardFilterPanel = document.getElementById("board-filter-panel");
 const doneCriteriaHelp = document.getElementById("done-criteria-help");
 
 
@@ -142,6 +144,7 @@ const loadPreferences = () => {
     highlightWeekend: true,
     doneByColumn: true,
     doneByFlag: false,
+    showBoardFilter: true,
   };
   const stored = localStorage.getItem("teamio-preferences");
   if (!stored) {
@@ -156,6 +159,14 @@ const savePreferences = (preferences) => {
 };
 
 let preferences = loadPreferences();
+
+const applyBoardFilterVisibility = () => {
+  if (!boardFilterPanel) {
+    return;
+  }
+  boardFilterPanel.classList.toggle("board-filter--hidden", !preferences.showBoardFilter);
+};
+
 
 const loadColumns = () => {
   const stored = localStorage.getItem("teamio-columns");
@@ -268,55 +279,6 @@ const getVisibleTasks = () => {
   return accountTasks.filter((task) => (task.teamIds ?? []).some((teamId) => selectedTeamIds.includes(teamId)));
 };
 
-const loadAccounts = () => JSON.parse(localStorage.getItem("teamio-accounts") ?? "[]");
-
-const saveAccounts = (accounts) => {
-  localStorage.setItem("teamio-accounts", JSON.stringify(accounts));
-};
-
-const getCurrentAccount = () => {
-  const user = loadCurrentUser();
-  if (!user?.accountId) {
-    return null;
-  }
-  return loadAccounts().find((account) => account.id === user.accountId) ?? null;
-};
-
-const getSelectedValues = (selectEl) =>
-  Array.from(selectEl?.selectedOptions ?? [])
-    .map((option) => option.value)
-    .filter(Boolean);
-
-const syncTeamSelectors = () => {
-  const account = getCurrentAccount();
-  const teams = account?.teams ?? [];
-
-  [memberTeamIdsSelect, taskTeamIdsSelect, boardTeamFilter].forEach((selectEl) => {
-    if (!selectEl) {
-      return;
-    }
-    const selected = new Set(getSelectedValues(selectEl));
-    selectEl.innerHTML = "";
-    teams.forEach((team) => {
-      const option = document.createElement("option");
-      option.value = team.id;
-      option.textContent = team.name;
-      option.selected = selected.has(team.id);
-      selectEl.append(option);
-    });
-  });
-};
-
-const getVisibleTasks = () => {
-  const user = loadCurrentUser();
-  const allTasks = loadTasks();
-  const accountTasks = allTasks.filter((task) => !user?.accountId || task.accountId === user.accountId);
-  const selectedTeamIds = getSelectedValues(boardTeamFilter);
-  if (selectedTeamIds.length === 0) {
-    return accountTasks;
-  }
-  return accountTasks.filter((task) => (task.teamIds ?? []).some((teamId) => selectedTeamIds.includes(teamId)));
-};
 
 const loadCalendar = () => JSON.parse(localStorage.getItem("teamio-calendar") ?? "[]");
 
@@ -551,6 +513,20 @@ const requestPasswordReset = async (email) => {
   tokens.push({ token, email: normalizedEmail, createdAt: Date.now() });
   saveResetTokens(tokens);
   resetLinkEl.textContent = "Линкът за смяна е генериран в демо режим (без реално изпращане на имейл).";
+};
+
+const clearSensitiveQueryParams = () => {
+  const url = new URL(window.location.href);
+  const hadEmail = url.searchParams.has("email");
+  const hadPassword = url.searchParams.has("password");
+
+  if (!hadEmail && !hadPassword) {
+    return;
+  }
+
+  url.searchParams.delete("email");
+  url.searchParams.delete("password");
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
 };
 
 const openResetFromUrl = () => {
@@ -1276,6 +1252,10 @@ if (doneByColumnCheckbox) {
 if (doneByFlagCheckbox) {
   doneByFlagCheckbox.checked = preferences.doneByFlag;
 }
+if (showBoardFilterCheckbox) {
+  showBoardFilterCheckbox.checked = preferences.showBoardFilter;
+}
+applyBoardFilterVisibility();
 
 weekStartDaySelect?.addEventListener("change", () => {
   preferences.weekStartDay = weekStartDaySelect.value;
@@ -1299,6 +1279,12 @@ doneByFlagCheckbox?.addEventListener("change", () => {
   preferences.doneByFlag = doneByFlagCheckbox.checked;
   savePreferences(preferences);
   updateReports();
+});
+
+showBoardFilterCheckbox?.addEventListener("change", () => {
+  preferences.showBoardFilter = showBoardFilterCheckbox.checked;
+  savePreferences(preferences);
+  applyBoardFilterVisibility();
 });
 
 groupTiles.forEach((tile) => {
@@ -1509,4 +1495,5 @@ if (activeUser) {
   showAuth();
 }
 
+clearSensitiveQueryParams();
 openResetFromUrl();
