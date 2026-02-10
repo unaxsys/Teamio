@@ -15,6 +15,25 @@
   <body>
     <div class="auth-screen" id="auth-screen">
       <div class="auth-card">
+        <section class="auth-welcome" aria-label="Добре дошли в Teamio">
+          <div class="auth-welcome__content">
+            <p class="auth-welcome__eyebrow">Добре дошли в Teamio</p>
+            <h1>Планирай деня си с лекота</h1>
+            <p>
+              Едно място за задачи, екипи и идеи — подредено, спокойно и винаги под ръка.
+            </p>
+            <div class="auth-welcome__chips">
+              <span>✨ Ясни приоритети</span>
+              <span>📅 Умен календар</span>
+              <span>🤝 Работа в екип</span>
+            </div>
+          </div>
+          <div class="auth-welcome__art" aria-hidden="true">
+            <span class="blob blob--one"></span>
+            <span class="blob blob--two"></span>
+            <span class="blob blob--three"></span>
+          </div>
+        </section>
         <div class="auth-brand">
           <span class="brand__dot"></span>
           <div>
@@ -280,12 +299,29 @@
                 </div>
               </div>
               <div class="setting-item">
-                <h4>Синхронизация</h4>
-                <p>Локално съхранение и готовност за desktop.</p>
-                <div class="sync__status">
-                  <span class="sync__dot"></span>
-                  <span>Активна</span>
-                </div>
+                <h4>Календар и отчети</h4>
+                <p>Контролирай началния ден, уикенд оцветяване и критерия за завършени задачи.</p>
+                <label>
+                  Начален ден на седмицата
+                  <select id="week-start-day">
+                    <option value="monday">Понеделник</option>
+                    <option value="sunday">Неделя</option>
+                    <option value="saturday">Събота</option>
+                  </select>
+                </label>
+                <label class="setting-check">
+                  <input type="checkbox" id="setting-highlight-weekend" checked />
+                  Оцветявай събота и неделя различно
+                </label>
+                <label class="setting-check">
+                  <input type="checkbox" id="setting-done-by-column" checked />
+                  Завършена задача, ако е в колона „Готово“
+                </label>
+                <label class="setting-check">
+                  <input type="checkbox" id="setting-done-by-flag" />
+                  Завършена задача, ако е маркирана в детайлите
+                </label>
+                <p class="panel-list__meta" id="done-criteria-help"></p>
               </div>
             </div>
           </div>
