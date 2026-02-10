@@ -46,29 +46,45 @@ const server = createServer(async (req, res) => {
     const name = normalizeText(body.name);
     const email = normalizeEmail(body.email);
     const password = normalizeText(body.password);
+    const companyName = normalizeText(body.companyName);
 
-    if (!name || !email || password.length < 6) {
+    if (!name || !email || !companyName || password.length < 6) {
       send(res, 400, { message: "Невалидни данни за регистрация." });
       return;
     }
 
     const db = await readDb();
+    db.accounts ??= [];
     if (db.users.some((user) => normalizeEmail(user.email) === email)) {
       send(res, 409, { message: "Този имейл вече е регистриран." });
       return;
     }
+
+    const accountId = `account-${Date.now()}`;
+    db.accounts.push({
+      id: accountId,
+      name: companyName,
+      teams: [
+        { id: `team-${Date.now()}-1`, name: "Продуктов екип" },
+        { id: `team-${Date.now()}-2`, name: "Инженерен екип" },
+      ],
+      members: [],
+    });
 
     const newUser = {
       id: `user-${Date.now()}`,
       name,
       email,
       password: hashPassword(password),
+      accountId,
     };
 
     db.users.push(newUser);
     await writeDb(db);
 
-    send(res, 201, { user: { id: newUser.id, name: newUser.name, email: newUser.email } });
+    send(res, 201, {
+      user: { id: newUser.id, name: newUser.name, email: newUser.email, accountId: newUser.accountId },
+    });
     return;
   }
 
@@ -86,7 +102,7 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    send(res, 200, { user: { id: user.id, name: user.name, email: user.email } });
+    send(res, 200, { user: { id: user.id, name: user.name, email: user.email, accountId: user.accountId } });
     return;
   }
 

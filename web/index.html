@@ -57,6 +57,10 @@
             <input type="email" name="email" placeholder="team@company.com" required />
           </label>
           <label>
+            Фирма
+            <input type="text" name="companyName" placeholder="Пример: Teamio OOD" required />
+          </label>
+          <label>
             Парола
             <input type="password" name="password" placeholder="Минимум 6 символа" minlength="6" required />
           </label>
@@ -152,8 +156,8 @@
             <p id="stat-active">0</p>
           </div>
           <div class="stat">
-            <h4>Екип</h4>
-            <p>6 човека</p>
+            <h4>Хора във фирмата</h4>
+            <p id="stat-team-size">0</p>
           </div>
           <div class="stat">
             <h4>Срокове тази седмица</h4>
@@ -162,11 +166,23 @@
         </section>
 
         <section class="board tab-panel tab-panel--active" id="board" data-tab-panel="boards"></section>
+        <section class="panel-card tab-panel tab-panel--active" data-tab-panel="boards">
+          <h3>Филтър по екипи</h3>
+          <p>Избери 2, 3 или n екипа, за да обединиш задачите им.</p>
+          <select id="board-team-filter" multiple></select>
+        </section>
 
         <section class="tab-panel" data-tab-panel="teams">
           <div class="panel-card">
             <h2>Екипи</h2>
-            <p>Създавай екипи, добавяй роли и проследявай натовареност.</p>
+            <p>Създавай екипи, добавяй хора в 1 или няколко екипа и отделяй задачите по екипи.</p>
+            <form class="panel-form" id="team-create-form">
+              <label>
+                Нов екип
+                <input type="text" name="teamName" placeholder="Продуктов екип" required />
+              </label>
+              <button type="submit" class="ghost panel-form__submit">Добави екип</button>
+            </form>
             <form class="panel-form" id="team-form">
               <label>
                 Име
@@ -177,30 +193,13 @@
                 <input type="text" name="role" placeholder="Продукт, QA, Дизайн" required />
               </label>
               <label>
-                Група
-                <select name="group">
-                  <option value="product">Продуктов екип</option>
-                  <option value="engineering">Инженерен екип</option>
-                  <option value="marketing">Маркетинг</option>
-                </select>
+                Екипи
+                <select name="teamIds" id="member-team-ids" multiple required></select>
               </label>
               <button type="submit" class="primary panel-form__submit">Добави човек</button>
             </form>
             <div class="panel-list" id="team-list"></div>
-            <div class="panel-grid">
-              <button type="button" class="panel-tile panel-tile--button" data-group="product">
-                <h3>Продуктов екип</h3>
-                <p>Дизайн, UX, продуктови цели и експерименти.</p>
-              </button>
-              <button type="button" class="panel-tile panel-tile--button" data-group="engineering">
-                <h3>Инженерен екип</h3>
-                <p>Спринтове, код ревюта и релийз планиране.</p>
-              </button>
-              <button type="button" class="panel-tile panel-tile--button" data-group="marketing">
-                <h3>Маркетинг</h3>
-                <p>Кампании, съдържание и анализи.</p>
-              </button>
-            </div>
+            <div class="panel-list" id="team-catalog"></div>
           </div>
         </section>
 
@@ -353,6 +352,10 @@
               <option value="L2" selected>L2 – Оперативно</option>
               <option value="L3">L3 – Детайлно</option>
             </select>
+          </label>
+          <label>
+            Екипи
+            <select name="teamIds" id="task-team-ids" multiple required></select>
           </label>
           <div class="modal__actions">
             <button type="button" class="ghost" id="close-modal">Отказ</button>
