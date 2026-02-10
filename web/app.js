@@ -67,6 +67,8 @@ const weekStartDaySelect = document.getElementById("week-start-day");
 const highlightWeekendCheckbox = document.getElementById("setting-highlight-weekend");
 const doneByColumnCheckbox = document.getElementById("setting-done-by-column");
 const doneByFlagCheckbox = document.getElementById("setting-done-by-flag");
+const showBoardFilterCheckbox = document.getElementById("setting-show-board-filter");
+const boardFilterPanel = document.getElementById("board-filter-panel");
 const doneCriteriaHelp = document.getElementById("done-criteria-help");
 
 
@@ -142,6 +144,7 @@ const loadPreferences = () => {
     highlightWeekend: true,
     doneByColumn: true,
     doneByFlag: false,
+    showBoardFilter: true,
   };
   const stored = localStorage.getItem("teamio-preferences");
   if (!stored) {
@@ -156,6 +159,14 @@ const savePreferences = (preferences) => {
 };
 
 let preferences = loadPreferences();
+
+const applyBoardFilterVisibility = () => {
+  if (!boardFilterPanel) {
+    return;
+  }
+  boardFilterPanel.classList.toggle("board-filter--hidden", !preferences.showBoardFilter);
+};
+
 
 const loadColumns = () => {
   const stored = localStorage.getItem("teamio-columns");
@@ -1241,6 +1252,10 @@ if (doneByColumnCheckbox) {
 if (doneByFlagCheckbox) {
   doneByFlagCheckbox.checked = preferences.doneByFlag;
 }
+if (showBoardFilterCheckbox) {
+  showBoardFilterCheckbox.checked = preferences.showBoardFilter;
+}
+applyBoardFilterVisibility();
 
 weekStartDaySelect?.addEventListener("change", () => {
   preferences.weekStartDay = weekStartDaySelect.value;
@@ -1264,6 +1279,12 @@ doneByFlagCheckbox?.addEventListener("change", () => {
   preferences.doneByFlag = doneByFlagCheckbox.checked;
   savePreferences(preferences);
   updateReports();
+});
+
+showBoardFilterCheckbox?.addEventListener("change", () => {
+  preferences.showBoardFilter = showBoardFilterCheckbox.checked;
+  savePreferences(preferences);
+  applyBoardFilterVisibility();
 });
 
 groupTiles.forEach((tile) => {

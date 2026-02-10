@@ -185,12 +185,15 @@
           </div>
         </section>
 
-        <section class="board tab-panel tab-panel--active" id="board" data-tab-panel="boards"></section>
-        <section class="panel-card tab-panel tab-panel--active" data-tab-panel="boards">
-          <h3>Филтър по екипи</h3>
-          <p>Избери 2, 3 или n екипа, за да обединиш задачите им.</p>
+        <section class="panel-card board-filter tab-panel tab-panel--active" id="board-filter-panel" data-tab-panel="boards">
+          <div>
+            <h3>Филтър по екипи</h3>
+            <p>Избери няколко екипа, за да виждаш обединен поток от задачи.</p>
+          </div>
           <select id="board-team-filter" multiple></select>
         </section>
+
+        <section class="board tab-panel tab-panel--active" id="board" data-tab-panel="boards"></section>
 
         <section class="tab-panel" data-tab-panel="teams">
           <div class="panel-card">
@@ -321,6 +324,10 @@
                 <label class="setting-check">
                   <input type="checkbox" id="setting-done-by-flag" />
                   Завършена задача, ако е маркирана в детайлите
+                </label>
+                <label class="setting-check">
+                  <input type="checkbox" id="setting-show-board-filter" checked />
+                  Показвай филтъра по екипи над таблото
                 </label>
                 <p class="panel-list__meta" id="done-criteria-help"></p>
               </div>
