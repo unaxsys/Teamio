@@ -184,14 +184,6 @@
           </div>
         </section>
 
-        <section class="panel-card board-filter tab-panel tab-panel--active" id="board-filter-panel" data-tab-panel="boards">
-          <div>
-            <h3>Филтър по екипи</h3>
-            <p>Избери няколко екипа, за да виждаш обединен поток от задачи.</p>
-          </div>
-          <select id="board-team-filter" multiple></select>
-        </section>
-
         <section class="board tab-panel tab-panel--active" id="board" data-tab-panel="boards"></section>
 
         <section class="tab-panel" data-tab-panel="teams">
@@ -329,6 +321,13 @@
                   Показвай филтъра по екипи над таблото
                 </label>
                 <p class="panel-list__meta" id="done-criteria-help"></p>
+              </div>
+              <div class="setting-item board-filter" id="board-filter-panel">
+                <div>
+                  <h4>Филтър по екипи</h4>
+                  <p>Избери екипите, които да се виждат в таблото със задачи.</p>
+                </div>
+                <select id="board-team-filter" multiple></select>
               </div>
             </div>
           </div>
