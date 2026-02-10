@@ -33,6 +33,12 @@ const teamForm = document.getElementById("team-form");
 const teamList = document.getElementById("team-list");
 const calendarForm = document.getElementById("calendar-form");
 const calendarList = document.getElementById("calendar-list");
+const calendarGrid = document.getElementById("calendar-grid");
+const calendarViewSelect = document.getElementById("calendar-view");
+const calendarFocusDateInput = document.getElementById("calendar-focus-date");
+const calendarPrevButton = document.getElementById("calendar-prev");
+const calendarTodayButton = document.getElementById("calendar-today");
+const calendarNextButton = document.getElementById("calendar-next");
 const reportDone = document.getElementById("report-done");
 const reportActive = document.getElementById("report-active");
 const reportVelocity = document.getElementById("report-velocity");
@@ -54,6 +60,7 @@ const defaultTasks = [
     due: "2024-06-18",
     column: "backlog",
     tag: "UX",
+    level: "L1",
   },
   {
     id: "task-2",
@@ -62,6 +69,7 @@ const defaultTasks = [
     due: "2024-06-19",
     column: "progress",
     tag: "Екип",
+    level: "L2",
   },
   {
     id: "task-3",
@@ -70,6 +78,7 @@ const defaultTasks = [
     due: "2024-06-21",
     column: "review",
     tag: "QA",
+    level: "L3",
   },
   {
     id: "task-4",
@@ -78,8 +87,17 @@ const defaultTasks = [
     due: "2024-06-25",
     column: "done",
     tag: "Release",
+    level: "L2",
   },
 ];
+
+
+const levelOrder = { L1: 1, L2: 2, L3: 3 };
+
+const calendarState = {
+  view: localStorage.getItem("teamio-calendar-view") ?? "week",
+  focusDate: localStorage.getItem("teamio-calendar-focus") ?? new Date().toISOString().slice(0, 10),
+};
 
 const loadColumns = () => {
   const stored = localStorage.getItem("teamio-columns");
@@ -378,13 +396,24 @@ const closeTaskModal = () => {
 const createCard = (task, columnColor) => {
   const card = document.createElement("article");
   card.className = "card";
+  const level = task.level ?? "L2";
+  card.classList.add(`card--${level.toLowerCase()}`);
   card.draggable = true;
   card.dataset.taskId = task.id;
   card.style.setProperty("--card-accent", columnColor ?? "#5b6bff");
 
+  const titleRow = document.createElement("div");
+  titleRow.className = "card__title-row";
+
   const title = document.createElement("div");
   title.className = "card__title";
   title.textContent = task.title;
+
+  const levelBadge = document.createElement("span");
+  levelBadge.className = "card__level";
+  levelBadge.textContent = level;
+
+  titleRow.append(title, levelBadge);
 
   const desc = document.createElement("p");
   desc.className = "card__desc";
@@ -401,7 +430,7 @@ const createCard = (task, columnColor) => {
   due.textContent = task.due ? new Date(task.due).toLocaleDateString("bg-BG") : "Без срок";
 
   footer.append(tag, due);
-  card.append(title, desc, footer);
+  card.append(titleRow, desc, footer);
 
   card.addEventListener("dragstart", (event) => {
     event.dataTransfer.setData("text/plain", task.id);
@@ -440,11 +469,24 @@ const renderBoard = (tasks) => {
 
     const count = document.createElement("span");
     count.className = "column__count";
-    const columnTasks = tasks.filter((task) => task.column === column.id);
+    const columnTasks = tasks
+      .filter((task) => task.column === column.id)
+      .sort((a, b) => (levelOrder[a.level ?? "L2"] ?? 2) - (levelOrder[b.level ?? "L2"] ?? 2));
     count.textContent = `${columnTasks.length} задачи`;
 
     const actions = document.createElement("div");
     actions.className = "column__actions";
+
+    const dragButton = document.createElement("button");
+    dragButton.type = "button";
+    dragButton.className = "column__drag";
+    dragButton.textContent = "☰";
+    dragButton.draggable = true;
+    dragButton.title = "Премести колона";
+    dragButton.addEventListener("dragstart", (event) => {
+      event.dataTransfer.setData("application/x-teamio-column", column.id);
+      event.dataTransfer.effectAllowed = "move";
+    });
 
     const renameButton = document.createElement("button");
     renameButton.type = "button";
@@ -462,7 +504,7 @@ const renderBoard = (tasks) => {
       renderBoard(tasks);
     });
 
-    actions.append(count, renameButton);
+    actions.append(count, dragButton, renameButton);
     header.append(titleWrap, actions);
     columnEl.append(header);
 
@@ -472,11 +514,42 @@ const renderBoard = (tasks) => {
 
     columnEl.addEventListener("dragover", (event) => {
       event.preventDefault();
+      if (event.dataTransfer.types.includes("application/x-teamio-column")) {
+        columnEl.classList.add("column--drag-over");
+      }
+    });
+
+    columnEl.addEventListener("dragleave", () => {
+      columnEl.classList.remove("column--drag-over");
     });
 
     columnEl.addEventListener("drop", (event) => {
       event.preventDefault();
+      columnEl.classList.remove("column--drag-over");
+
+      const draggedColumnId = event.dataTransfer.getData("application/x-teamio-column");
+      if (draggedColumnId) {
+        if (draggedColumnId === column.id) {
+          return;
+        }
+        const columns = loadColumns();
+        const sourceIndex = columns.findIndex((entry) => entry.id === draggedColumnId);
+        const targetIndex = columns.findIndex((entry) => entry.id === column.id);
+        if (sourceIndex === -1 || targetIndex === -1) {
+          return;
+        }
+        const nextColumns = [...columns];
+        const [moved] = nextColumns.splice(sourceIndex, 1);
+        nextColumns.splice(targetIndex, 0, moved);
+        saveColumns(nextColumns);
+        renderBoard(loadTasks());
+        return;
+      }
+
       const taskId = event.dataTransfer.getData("text/plain");
+      if (!taskId) {
+        return;
+      }
       const updated = tasks.map((task) =>
         task.id === taskId ? { ...task, column: column.id } : task
       );
@@ -523,8 +596,99 @@ const renderTeams = () => {
   });
 };
 
+const parseDateOnly = (dateString) => {
+  const [year, month, day] = dateString.split("-").map(Number);
+  return new Date(year, month - 1, day);
+};
+
+const formatDateOnly = (date) => {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const startOfWeek = (date) => {
+  const result = new Date(date);
+  const day = result.getDay();
+  const offset = day === 0 ? -6 : 1 - day;
+  result.setDate(result.getDate() + offset);
+  result.setHours(0, 0, 0, 0);
+  return result;
+};
+
+const renderCalendarGrid = (items) => {
+  if (!calendarGrid) {
+    return;
+  }
+
+  calendarGrid.innerHTML = "";
+  const focus = parseDateOnly(calendarState.focusDate);
+  const days = [];
+
+  if (calendarState.view === "month") {
+    const start = new Date(focus.getFullYear(), focus.getMonth(), 1);
+    const end = new Date(focus.getFullYear(), focus.getMonth() + 1, 0);
+    for (let date = new Date(start); date <= end; date.setDate(date.getDate() + 1)) {
+      days.push(new Date(date));
+    }
+  } else {
+    const weekStart = startOfWeek(focus);
+    for (let i = 0; i < 7; i += 1) {
+      const date = new Date(weekStart);
+      date.setDate(weekStart.getDate() + i);
+      days.push(date);
+    }
+  }
+
+  const grouped = items.reduce((acc, item) => {
+    const key = item.date;
+    if (!acc[key]) {
+      acc[key] = [];
+    }
+    acc[key].push(item);
+    return acc;
+  }, {});
+
+  days.forEach((date) => {
+    const key = formatDateOnly(date);
+    const dayEl = document.createElement("div");
+    dayEl.className = "calendar-day";
+
+    const label = document.createElement("span");
+    label.className = "calendar-day__label";
+    label.textContent = date.toLocaleDateString("bg-BG", {
+      weekday: "short",
+      day: "2-digit",
+      month: "2-digit",
+    });
+
+    dayEl.append(label);
+
+    const dayItems = grouped[key] ?? [];
+    if (dayItems.length === 0) {
+      const empty = document.createElement("span");
+      empty.className = "calendar-day__item";
+      empty.textContent = "Няма събития";
+      dayEl.append(empty);
+    } else {
+      dayItems.forEach((entry) => {
+        const item = document.createElement("span");
+        item.className = "calendar-day__item";
+        item.textContent = `• ${entry.title}`;
+        dayEl.append(item);
+      });
+    }
+
+    calendarGrid.append(dayEl);
+  });
+};
+
 const renderCalendar = () => {
   const items = loadCalendar();
+  if (calendarFocusDateInput) {
+    calendarFocusDateInput.value = calendarState.focusDate;
+  }
   calendarList.innerHTML = "";
   items
     .sort((a, b) => new Date(a.date) - new Date(b.date))
@@ -548,6 +712,8 @@ const renderCalendar = () => {
       item.append(info, remove);
       calendarList.append(item);
     });
+
+  renderCalendarGrid(items);
 };
 
 const updateReports = () => {
@@ -634,6 +800,67 @@ calendarForm.addEventListener("submit", (event) => {
   const updated = [...loadCalendar(), newEvent];
   saveCalendar(updated);
   calendarForm.reset();
+  renderCalendar();
+});
+
+if (calendarViewSelect) {
+  calendarViewSelect.value = calendarState.view;
+}
+if (calendarFocusDateInput) {
+  calendarFocusDateInput.value = calendarState.focusDate;
+}
+
+calendarViewSelect?.addEventListener("change", () => {
+  calendarState.view = calendarViewSelect.value;
+  localStorage.setItem("teamio-calendar-view", calendarState.view);
+  renderCalendar();
+});
+
+calendarFocusDateInput?.addEventListener("change", () => {
+  if (!calendarFocusDateInput.value) {
+    return;
+  }
+  calendarState.focusDate = calendarFocusDateInput.value;
+  localStorage.setItem("teamio-calendar-focus", calendarState.focusDate);
+  renderCalendar();
+});
+
+calendarTodayButton?.addEventListener("click", () => {
+  calendarState.focusDate = new Date().toISOString().slice(0, 10);
+  localStorage.setItem("teamio-calendar-focus", calendarState.focusDate);
+  if (calendarFocusDateInput) {
+    calendarFocusDateInput.value = calendarState.focusDate;
+  }
+  renderCalendar();
+});
+
+calendarPrevButton?.addEventListener("click", () => {
+  const current = parseDateOnly(calendarState.focusDate);
+  if (calendarState.view === "month") {
+    current.setMonth(current.getMonth() - 1);
+  } else {
+    current.setDate(current.getDate() - 7);
+  }
+  calendarState.focusDate = formatDateOnly(current);
+  localStorage.setItem("teamio-calendar-focus", calendarState.focusDate);
+  if (calendarFocusDateInput) {
+    calendarFocusDateInput.value = calendarState.focusDate;
+  }
+  renderCalendar();
+});
+
+calendarNextButton?.addEventListener("click", () => {
+  const current = parseDateOnly(calendarState.focusDate);
+  if (calendarState.view === "month") {
+    current.setMonth(current.getMonth() + 1);
+  } else {
+    current.setDate(current.getDate() + 7);
+  }
+  calendarState.focusDate = formatDateOnly(current);
+  localStorage.setItem("teamio-calendar-focus", calendarState.focusDate);
+  if (calendarFocusDateInput) {
+    calendarFocusDateInput.value = calendarState.focusDate;
+  }
   renderCalendar();
 });
 
@@ -762,6 +989,7 @@ formEl.addEventListener("submit", (event) => {
     due: formData.get("due").toString(),
     column: formData.get("column").toString(),
     tag: "Ново",
+    level: formData.get("level")?.toString() ?? "L2",
   };
   const updated = [newTask, ...tasks];
   saveTasks(updated);

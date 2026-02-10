@@ -176,7 +176,7 @@
                 Роля
                 <input type="text" name="role" placeholder="Продукт, QA, Дизайн" required />
               </label>
-              <button type="submit" class="primary">Добави човек</button>
+              <button type="submit" class="primary panel-form__submit">Добави човек</button>
             </form>
             <div class="panel-list" id="team-list"></div>
             <div class="panel-grid">
@@ -209,31 +209,28 @@
                 Дата
                 <input type="date" name="date" required />
               </label>
-              <button type="submit" class="primary">Добави събитие</button>
+              <button type="submit" class="primary panel-form__submit">Добави събитие</button>
             </form>
             <div class="panel-list" id="calendar-list"></div>
-            <div class="calendar-grid">
-              <div class="calendar-day">
-                <h4>Пон</h4>
-                <span>Планиране на седмицата</span>
-              </div>
-              <div class="calendar-day">
-                <h4>Вт</h4>
-                <span>Демо на прототип</span>
-              </div>
-              <div class="calendar-day">
-                <h4>Ср</h4>
-                <span>Екипен синк</span>
-              </div>
-              <div class="calendar-day">
-                <h4>Чт</h4>
-                <span>QA и тестове</span>
-              </div>
-              <div class="calendar-day">
-                <h4>Пет</h4>
-                <span>Release</span>
+            <div class="calendar-toolbar">
+              <label>
+                Изглед
+                <select id="calendar-view">
+                  <option value="week">Седмица</option>
+                  <option value="month">Месец</option>
+                </select>
+              </label>
+              <label>
+                Отиди на дата
+                <input type="date" id="calendar-focus-date" />
+              </label>
+              <div class="calendar-toolbar__actions">
+                <button type="button" class="ghost" id="calendar-prev">Назад</button>
+                <button type="button" class="ghost" id="calendar-today">Днес</button>
+                <button type="button" class="ghost" id="calendar-next">Напред</button>
               </div>
             </div>
+            <div class="calendar-grid" id="calendar-grid"></div>
           </div>
         </section>
 
@@ -322,6 +319,14 @@
               <option value="progress">В процес</option>
               <option value="review">Преглед</option>
               <option value="done">Готово</option>
+            </select>
+          </label>
+          <label>
+            Ниво
+            <select name="level">
+              <option value="L1">L1 – Стратегическо</option>
+              <option value="L2" selected>L2 – Оперативно</option>
+              <option value="L3">L3 – Детайлно</option>
             </select>
           </label>
           <div class="modal__actions">
