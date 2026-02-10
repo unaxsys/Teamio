@@ -286,6 +286,22 @@ const saveCalendar = (items) => {
   localStorage.setItem("teamio-calendar", JSON.stringify(items));
 };
 
+const getCalendarItems = () => {
+  const manualItems = loadCalendar().map((item) => ({ ...item, source: "calendar" }));
+  const user = loadCurrentUser();
+  const taskItems = loadTasks()
+    .filter((task) => task.due && (!user?.accountId || task.accountId === user.accountId))
+    .map((task) => ({
+      id: `task-deadline-${task.id}`,
+      title: `📌 ${task.title}`,
+      date: task.due,
+      source: "task",
+      taskId: task.id,
+    }));
+
+  return [...manualItems, ...taskItems];
+};
+
 const normalizeEmail = (email) => email.trim().toLowerCase();
 
 const normalizeText = (value) => value.trim();
@@ -777,6 +793,7 @@ const renderBoard = (tasks) => {
       const updated = allTasks.map((task) => (task.id === taskId ? { ...task, column: column.id } : task));
       saveTasks(updated);
       renderBoard(getVisibleTasks());
+      renderCalendar();
     });
 
     boardEl.append(columnEl);
@@ -982,7 +999,7 @@ const renderCalendarGrid = (items) => {
 };
 
 const renderCalendar = () => {
-  const items = loadCalendar();
+  const items = getCalendarItems();
   if (calendarFocusDateInput) {
     calendarFocusDateInput.value = calendarState.focusDate;
   }
@@ -997,16 +1014,22 @@ const renderCalendar = () => {
       const dateLabel = event.date ? new Date(event.date).toLocaleDateString("bg-BG") : "";
       info.innerHTML = `<strong>${event.title}</strong><div class="panel-list__meta">${dateLabel}</div>`;
 
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "panel-list__remove";
-      remove.textContent = "Премахни";
-      remove.addEventListener("click", () => {
-        saveCalendar(items.filter((entry) => entry.id !== event.id));
-        renderCalendar();
-      });
+      if (event.source === "task") {
+        info.innerHTML = `<strong>${event.title}</strong><div class="panel-list__meta">${dateLabel} · срок по задача</div>`;
+        item.append(info);
+      } else {
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "panel-list__remove";
+        remove.textContent = "Премахни";
+        remove.addEventListener("click", () => {
+          const manualEvents = loadCalendar();
+          saveCalendar(manualEvents.filter((entry) => entry.id !== event.id));
+          renderCalendar();
+        });
 
-      item.append(info, remove);
+        item.append(info, remove);
+      }
       calendarList.append(item);
     });
 
@@ -1321,6 +1344,7 @@ taskDetailsForm?.addEventListener("submit", (event) => {
   saveTasks(updatedTasks);
   renderBoard(updatedTasks);
   updateReports();
+  renderCalendar();
   closeModal(taskDetailsModal);
 });
 
@@ -1473,6 +1497,7 @@ formEl.addEventListener("submit", (event) => {
   const updated = [newTask, ...tasks];
   saveTasks(updated);
   renderBoard(getVisibleTasks());
+  renderCalendar();
   closeTaskModal();
 });
 
