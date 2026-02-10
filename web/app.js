@@ -29,6 +29,13 @@ const densityButtons = document.querySelectorAll(".density-button");
 const closeModalButton = document.getElementById("close-modal");
 const statActive = document.getElementById("stat-active");
 const statDue = document.getElementById("stat-due");
+const teamForm = document.getElementById("team-form");
+const teamList = document.getElementById("team-list");
+const calendarForm = document.getElementById("calendar-form");
+const calendarList = document.getElementById("calendar-list");
+const reportDone = document.getElementById("report-done");
+const reportActive = document.getElementById("report-active");
+const reportVelocity = document.getElementById("report-velocity");
 
 const defaultColumns = [
   { id: "backlog", title: "Backlog", color: "#5b6bff" },
@@ -91,6 +98,18 @@ const loadUsers = () => JSON.parse(localStorage.getItem("teamio-users") ?? "[]")
 
 const saveUsers = (users) => {
   localStorage.setItem("teamio-users", JSON.stringify(users));
+};
+
+const loadTeams = () => JSON.parse(localStorage.getItem("teamio-teams") ?? "[]");
+
+const saveTeams = (teams) => {
+  localStorage.setItem("teamio-teams", JSON.stringify(teams));
+};
+
+const loadCalendar = () => JSON.parse(localStorage.getItem("teamio-calendar") ?? "[]");
+
+const saveCalendar = (items) => {
+  localStorage.setItem("teamio-calendar", JSON.stringify(items));
 };
 
 const hashPassword = async (password) => {
@@ -392,6 +411,70 @@ const renderBoard = (tasks) => {
     option.textContent = column.title;
     columnSelect.append(option);
   });
+
+  updateReports();
+};
+
+const renderTeams = () => {
+  const teams = loadTeams();
+  teamList.innerHTML = "";
+  teams.forEach((member) => {
+    const item = document.createElement("div");
+    item.className = "panel-list__item";
+
+    const info = document.createElement("div");
+    info.innerHTML = `<strong>${member.name}</strong><div class="panel-list__meta">${member.role}</div>`;
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "panel-list__remove";
+    remove.textContent = "Премахни";
+    remove.addEventListener("click", () => {
+      saveTeams(teams.filter((entry) => entry.id !== member.id));
+      renderTeams();
+      updateReports();
+    });
+
+    item.append(info, remove);
+    teamList.append(item);
+  });
+};
+
+const renderCalendar = () => {
+  const items = loadCalendar();
+  calendarList.innerHTML = "";
+  items
+    .sort((a, b) => new Date(a.date) - new Date(b.date))
+    .forEach((event) => {
+      const item = document.createElement("div");
+      item.className = "panel-list__item";
+
+      const info = document.createElement("div");
+      const dateLabel = event.date ? new Date(event.date).toLocaleDateString("bg-BG") : "";
+      info.innerHTML = `<strong>${event.title}</strong><div class="panel-list__meta">${dateLabel}</div>`;
+
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "panel-list__remove";
+      remove.textContent = "Премахни";
+      remove.addEventListener("click", () => {
+        saveCalendar(items.filter((entry) => entry.id !== event.id));
+        renderCalendar();
+      });
+
+      item.append(info, remove);
+      calendarList.append(item);
+    });
+};
+
+const updateReports = () => {
+  const tasks = loadTasks();
+  const doneCount = tasks.filter((task) => task.column === "done").length;
+  const activeCount = tasks.filter((task) => task.column !== "done").length;
+  const teamCount = loadTeams().length;
+  reportDone.textContent = doneCount.toString();
+  reportActive.textContent = activeCount.toString();
+  reportVelocity.textContent = teamCount > 0 ? `${Math.round((doneCount / teamCount) * 100)}%` : "0%";
 };
 
 newColumnButton.addEventListener("click", () => {
@@ -440,6 +523,35 @@ registerForm.addEventListener("submit", async (event) => {
     formData.get("email").toString(),
     formData.get("password").toString()
   );
+});
+
+teamForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const formData = new FormData(teamForm);
+  const newMember = {
+    id: `member-${Date.now()}`,
+    name: formData.get("name").toString(),
+    role: formData.get("role").toString(),
+  };
+  const updated = [...loadTeams(), newMember];
+  saveTeams(updated);
+  teamForm.reset();
+  renderTeams();
+  updateReports();
+});
+
+calendarForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const formData = new FormData(calendarForm);
+  const newEvent = {
+    id: `event-${Date.now()}`,
+    title: formData.get("title").toString(),
+    date: formData.get("date").toString(),
+  };
+  const updated = [...loadCalendar(), newEvent];
+  saveCalendar(updated);
+  calendarForm.reset();
+  renderCalendar();
 });
 
 forgotPasswordButton.addEventListener("click", () => {
@@ -566,6 +678,9 @@ const initialTasks = loadTasks();
 loadTheme();
 loadDensity();
 renderBoard(initialTasks);
+renderTeams();
+renderCalendar();
+updateReports();
 
 const activeUser = loadCurrentUser();
 if (activeUser) {

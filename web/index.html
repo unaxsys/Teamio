@@ -167,6 +167,18 @@
           <div class="panel-card">
             <h2>Екипи</h2>
             <p>Създавай екипи, добавяй роли и проследявай натовареност.</p>
+            <form class="panel-form" id="team-form">
+              <label>
+                Име
+                <input type="text" name="name" placeholder="Име и фамилия" required />
+              </label>
+              <label>
+                Роля
+                <input type="text" name="role" placeholder="Продукт, QA, Дизайн" required />
+              </label>
+              <button type="submit" class="primary">Добави човек</button>
+            </form>
+            <div class="panel-list" id="team-list"></div>
             <div class="panel-grid">
               <div class="panel-tile">
                 <h3>Продуктов екип</h3>
@@ -188,6 +200,18 @@
           <div class="panel-card">
             <h2>Календар</h2>
             <p>Визуализирай срокове и ключови събития за седмицата.</p>
+            <form class="panel-form" id="calendar-form">
+              <label>
+                Събитие
+                <input type="text" name="title" placeholder="Sprint planning" required />
+              </label>
+              <label>
+                Дата
+                <input type="date" name="date" required />
+              </label>
+              <button type="submit" class="primary">Добави събитие</button>
+            </form>
+            <div class="panel-list" id="calendar-list"></div>
             <div class="calendar-grid">
               <div class="calendar-day">
                 <h4>Пон</h4>
@@ -220,14 +244,17 @@
             <div class="reports-grid">
               <div class="report-tile">
                 <h3>Завършени задачи</h3>
+                <p class="report-number" id="report-done">0</p>
                 <div class="report-bar"><span></span></div>
               </div>
               <div class="report-tile">
                 <h3>Активни проекти</h3>
+                <p class="report-number" id="report-active">0</p>
                 <div class="report-bar report-bar--alt"><span></span></div>
               </div>
               <div class="report-tile">
                 <h3>Скорост на екипа</h3>
+                <p class="report-number" id="report-velocity">0%</p>
                 <div class="report-bar report-bar--third"><span></span></div>
               </div>
             </div>
