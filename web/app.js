@@ -30,7 +30,13 @@ const closeModalButton = document.getElementById("close-modal");
 const statActive = document.getElementById("stat-active");
 const statDue = document.getElementById("stat-due");
 const teamForm = document.getElementById("team-form");
+const teamCreateForm = document.getElementById("team-create-form");
 const teamList = document.getElementById("team-list");
+const teamCatalog = document.getElementById("team-catalog");
+const memberTeamIdsSelect = document.getElementById("member-team-ids");
+const taskTeamIdsSelect = document.getElementById("task-team-ids");
+const boardTeamFilter = document.getElementById("board-team-filter");
+const statTeamSize = document.getElementById("stat-team-size");
 const calendarForm = document.getElementById("calendar-form");
 const calendarList = document.getElementById("calendar-list");
 const calendarGrid = document.getElementById("calendar-grid");
@@ -124,6 +130,56 @@ const saveTeams = (teams) => {
   localStorage.setItem("teamio-teams", JSON.stringify(teams));
 };
 
+const loadAccounts = () => JSON.parse(localStorage.getItem("teamio-accounts") ?? "[]");
+
+const saveAccounts = (accounts) => {
+  localStorage.setItem("teamio-accounts", JSON.stringify(accounts));
+};
+
+const getCurrentAccount = () => {
+  const user = loadCurrentUser();
+  if (!user?.accountId) {
+    return null;
+  }
+  return loadAccounts().find((account) => account.id === user.accountId) ?? null;
+};
+
+const getSelectedValues = (selectEl) =>
+  Array.from(selectEl?.selectedOptions ?? [])
+    .map((option) => option.value)
+    .filter(Boolean);
+
+const syncTeamSelectors = () => {
+  const account = getCurrentAccount();
+  const teams = account?.teams ?? [];
+
+  [memberTeamIdsSelect, taskTeamIdsSelect, boardTeamFilter].forEach((selectEl) => {
+    if (!selectEl) {
+      return;
+    }
+    const selected = new Set(getSelectedValues(selectEl));
+    selectEl.innerHTML = "";
+    teams.forEach((team) => {
+      const option = document.createElement("option");
+      option.value = team.id;
+      option.textContent = team.name;
+      option.selected = selected.has(team.id);
+      selectEl.append(option);
+    });
+  });
+};
+
+const getVisibleTasks = () => {
+  const user = loadCurrentUser();
+  const allTasks = loadTasks();
+  const accountTasks = allTasks.filter((task) => !user?.accountId || task.accountId === user.accountId);
+  const selectedTeamIds = getSelectedValues(boardTeamFilter);
+  if (selectedTeamIds.length === 0) {
+    return accountTasks;
+  }
+  return accountTasks.filter((task) => (task.teamIds ?? []).some((teamId) => selectedTeamIds.includes(teamId)));
+};
+
 const loadCalendar = () => JSON.parse(localStorage.getItem("teamio-calendar") ?? "[]");
 
 const saveCalendar = (items) => {
@@ -202,6 +258,10 @@ const showApp = (user) => {
   authScreenEl.style.display = "none";
   appEl.classList.remove("app--hidden");
   updateProfile(user);
+  syncTeamSelectors();
+  renderBoard(getVisibleTasks());
+  renderTeams();
+  updateReports();
 };
 
 const showAuth = () => {
@@ -255,19 +315,25 @@ const handleLogin = async (email, password) => {
   showApp(user);
 };
 
-const handleRegister = async (name, email, password) => {
+const handleRegister = async (name, email, password, companyName) => {
   const normalizedName = normalizeText(name);
   const normalizedEmail = normalizeEmail(email);
   const normalizedPassword = normalizeText(password);
+  const normalizedCompanyName = normalizeText(companyName);
 
-  if (!normalizedName || !normalizedEmail || normalizedPassword.length < 6) {
+  if (!normalizedName || !normalizedEmail || !normalizedCompanyName || normalizedPassword.length < 6) {
     setAuthMessage("Попълни коректно всички полета.");
     return;
   }
 
   const apiResult = await apiRequest("/api/auth/register", {
     method: "POST",
-    body: JSON.stringify({ name: normalizedName, email: normalizedEmail, password: normalizedPassword }),
+    body: JSON.stringify({
+      name: normalizedName,
+      email: normalizedEmail,
+      password: normalizedPassword,
+      companyName: normalizedCompanyName,
+    }),
   });
 
   if (apiResult?.ok && apiResult.data?.user) {
@@ -278,13 +344,28 @@ const handleRegister = async (name, email, password) => {
   }
 
   const users = loadUsers();
+  const accounts = loadAccounts();
   if (users.some((item) => normalizeEmail(item.email) === normalizedEmail)) {
     setAuthMessage(apiResult?.data?.message ?? "Този имейл вече е регистриран.");
     return;
   }
 
+  const accountId = `account-${Date.now()}`;
+  const defaultTeams = [
+    { id: `team-${Date.now()}-1`, name: "Продуктов екип" },
+    { id: `team-${Date.now()}-2`, name: "Инженерен екип" },
+  ];
+  accounts.push({ id: accountId, name: normalizedCompanyName, teams: defaultTeams, members: [] });
+  saveAccounts(accounts);
+
   const hashed = await hashPassword(normalizedPassword);
-  const newUser = { id: `user-${Date.now()}`, name: normalizedName, email: normalizedEmail, password: hashed };
+  const newUser = {
+    id: `user-${Date.now()}`,
+    name: normalizedName,
+    email: normalizedEmail,
+    password: hashed,
+    accountId,
+  };
   const updated = [...users, newUser];
   saveUsers(updated);
   setCurrentUser(newUser);
@@ -542,7 +623,7 @@ const renderBoard = (tasks) => {
         const [moved] = nextColumns.splice(sourceIndex, 1);
         nextColumns.splice(targetIndex, 0, moved);
         saveColumns(nextColumns);
-        renderBoard(loadTasks());
+        renderBoard(getVisibleTasks());
         return;
       }
 
@@ -550,11 +631,10 @@ const renderBoard = (tasks) => {
       if (!taskId) {
         return;
       }
-      const updated = tasks.map((task) =>
-        task.id === taskId ? { ...task, column: column.id } : task
-      );
+      const allTasks = loadTasks();
+      const updated = allTasks.map((task) => (task.id === taskId ? { ...task, column: column.id } : task));
       saveTasks(updated);
-      renderBoard(updated);
+      renderBoard(getVisibleTasks());
     });
 
     boardEl.append(columnEl);
@@ -572,21 +652,33 @@ const renderBoard = (tasks) => {
 };
 
 const renderTeams = () => {
-  const teams = loadTeams();
+  const account = getCurrentAccount();
+  const members = account?.members ?? [];
+  const teams = account?.teams ?? [];
   teamList.innerHTML = "";
-  teams.forEach((member) => {
+  members.forEach((member) => {
     const item = document.createElement("div");
     item.className = "panel-list__item";
 
+    const teamNames = (member.teamIds ?? [])
+      .map((teamId) => teams.find((team) => team.id === teamId)?.name)
+      .filter(Boolean)
+      .join(", ");
+
     const info = document.createElement("div");
-    info.innerHTML = `<strong>${member.name}</strong><div class="panel-list__meta">${member.role}</div>`;
+    info.innerHTML = `<strong>${member.name}</strong><div class="panel-list__meta">${member.role} • ${teamNames || "Без екип"}</div>`;
 
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "panel-list__remove";
     remove.textContent = "Премахни";
     remove.addEventListener("click", () => {
-      saveTeams(teams.filter((entry) => entry.id !== member.id));
+      const accounts = loadAccounts().map((entry) =>
+        entry.id === account.id
+          ? { ...entry, members: (entry.members ?? []).filter((current) => current.id !== member.id) }
+          : entry
+      );
+      saveAccounts(accounts);
       renderTeams();
       updateReports();
     });
@@ -594,6 +686,19 @@ const renderTeams = () => {
     item.append(info, remove);
     teamList.append(item);
   });
+
+  if (teamCatalog) {
+    teamCatalog.innerHTML = "";
+    teams.forEach((team) => {
+      const teamCard = document.createElement("div");
+      teamCard.className = "panel-list__item";
+      const count = members.filter((member) => (member.teamIds ?? []).includes(team.id)).length;
+      teamCard.innerHTML = `<div><strong>${team.name}</strong><div class="panel-list__meta">${count} човека</div></div>`;
+      teamCatalog.append(teamCard);
+    });
+  }
+
+  syncTeamSelectors();
 };
 
 const parseDateOnly = (dateString) => {
@@ -717,13 +822,16 @@ const renderCalendar = () => {
 };
 
 const updateReports = () => {
-  const tasks = loadTasks();
+  const tasks = getVisibleTasks();
   const doneCount = tasks.filter((task) => task.column === "done").length;
   const activeCount = tasks.filter((task) => task.column !== "done").length;
-  const teamCount = loadTeams().length;
+  const teamCount = getCurrentAccount()?.members?.length ?? 0;
   reportDone.textContent = doneCount.toString();
   reportActive.textContent = activeCount.toString();
   reportVelocity.textContent = teamCount > 0 ? `${Math.round((doneCount / teamCount) * 100)}%` : "0%";
+  if (statTeamSize) {
+    statTeamSize.textContent = `${teamCount}`;
+  }
 };
 
 newColumnButton.addEventListener("click", () => {
@@ -740,7 +848,7 @@ newColumnButton.addEventListener("click", () => {
   };
   const updated = [...columns, newColumn];
   saveColumns(updated);
-  renderBoard(loadTasks());
+  renderBoard(getVisibleTasks());
 });
 
 const activateAuthForm = (target) => {
@@ -770,20 +878,50 @@ registerForm.addEventListener("submit", async (event) => {
   await handleRegister(
     formData.get("name").toString(),
     formData.get("email").toString(),
-    formData.get("password").toString()
+    formData.get("password").toString(),
+    formData.get("companyName").toString()
   );
+});
+
+teamCreateForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const formData = new FormData(teamCreateForm);
+  const teamName = normalizeText(formData.get("teamName")?.toString() ?? "");
+  if (!teamName) {
+    return;
+  }
+  const account = getCurrentAccount();
+  if (!account) {
+    return;
+  }
+  const updatedAccounts = loadAccounts().map((entry) =>
+    entry.id === account.id
+      ? { ...entry, teams: [...(entry.teams ?? []), { id: `team-${Date.now()}`, name: teamName }] }
+      : entry
+  );
+  saveAccounts(updatedAccounts);
+  teamCreateForm.reset();
+  renderTeams();
 });
 
 teamForm.addEventListener("submit", (event) => {
   event.preventDefault();
+  const account = getCurrentAccount();
+  if (!account) {
+    return;
+  }
   const formData = new FormData(teamForm);
+  const selectedTeamIds = getSelectedValues(memberTeamIdsSelect);
   const newMember = {
     id: `member-${Date.now()}`,
     name: formData.get("name").toString(),
     role: formData.get("role").toString(),
+    teamIds: selectedTeamIds,
   };
-  const updated = [...loadTeams(), newMember];
-  saveTeams(updated);
+  const updatedAccounts = loadAccounts().map((entry) =>
+    entry.id === account.id ? { ...entry, members: [...(entry.members ?? []), newMember] } : entry
+  );
+  saveAccounts(updatedAccounts);
   teamForm.reset();
   renderTeams();
   updateReports();
@@ -981,6 +1119,11 @@ newPasswordModal.addEventListener("click", (event) => {
 formEl.addEventListener("submit", (event) => {
   event.preventDefault();
   const formData = new FormData(formEl);
+  const currentUser = loadCurrentUser();
+  const selectedTeamIds = getSelectedValues(taskTeamIdsSelect);
+  if (selectedTeamIds.length === 0) {
+    return;
+  }
   const tasks = loadTasks();
   const newTask = {
     id: `task-${Date.now()}`,
@@ -990,14 +1133,20 @@ formEl.addEventListener("submit", (event) => {
     column: formData.get("column").toString(),
     tag: "Ново",
     level: formData.get("level")?.toString() ?? "L2",
+    teamIds: selectedTeamIds,
+    accountId: currentUser?.accountId,
   };
   const updated = [newTask, ...tasks];
   saveTasks(updated);
-  renderBoard(updated);
+  renderBoard(getVisibleTasks());
   closeTaskModal();
 });
 
-const initialTasks = loadTasks();
+boardTeamFilter?.addEventListener("change", () => {
+  renderBoard(getVisibleTasks());
+});
+
+const initialTasks = getVisibleTasks();
 loadTheme();
 loadDensity();
 renderBoard(initialTasks);
