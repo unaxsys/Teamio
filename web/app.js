@@ -268,55 +268,6 @@ const getVisibleTasks = () => {
   return accountTasks.filter((task) => (task.teamIds ?? []).some((teamId) => selectedTeamIds.includes(teamId)));
 };
 
-const loadAccounts = () => JSON.parse(localStorage.getItem("teamio-accounts") ?? "[]");
-
-const saveAccounts = (accounts) => {
-  localStorage.setItem("teamio-accounts", JSON.stringify(accounts));
-};
-
-const getCurrentAccount = () => {
-  const user = loadCurrentUser();
-  if (!user?.accountId) {
-    return null;
-  }
-  return loadAccounts().find((account) => account.id === user.accountId) ?? null;
-};
-
-const getSelectedValues = (selectEl) =>
-  Array.from(selectEl?.selectedOptions ?? [])
-    .map((option) => option.value)
-    .filter(Boolean);
-
-const syncTeamSelectors = () => {
-  const account = getCurrentAccount();
-  const teams = account?.teams ?? [];
-
-  [memberTeamIdsSelect, taskTeamIdsSelect, boardTeamFilter].forEach((selectEl) => {
-    if (!selectEl) {
-      return;
-    }
-    const selected = new Set(getSelectedValues(selectEl));
-    selectEl.innerHTML = "";
-    teams.forEach((team) => {
-      const option = document.createElement("option");
-      option.value = team.id;
-      option.textContent = team.name;
-      option.selected = selected.has(team.id);
-      selectEl.append(option);
-    });
-  });
-};
-
-const getVisibleTasks = () => {
-  const user = loadCurrentUser();
-  const allTasks = loadTasks();
-  const accountTasks = allTasks.filter((task) => !user?.accountId || task.accountId === user.accountId);
-  const selectedTeamIds = getSelectedValues(boardTeamFilter);
-  if (selectedTeamIds.length === 0) {
-    return accountTasks;
-  }
-  return accountTasks.filter((task) => (task.teamIds ?? []).some((teamId) => selectedTeamIds.includes(teamId)));
-};
 
 const loadCalendar = () => JSON.parse(localStorage.getItem("teamio-calendar") ?? "[]");
 
@@ -551,6 +502,20 @@ const requestPasswordReset = async (email) => {
   tokens.push({ token, email: normalizedEmail, createdAt: Date.now() });
   saveResetTokens(tokens);
   resetLinkEl.textContent = "Линкът за смяна е генериран в демо режим (без реално изпращане на имейл).";
+};
+
+const clearSensitiveQueryParams = () => {
+  const url = new URL(window.location.href);
+  const hadEmail = url.searchParams.has("email");
+  const hadPassword = url.searchParams.has("password");
+
+  if (!hadEmail && !hadPassword) {
+    return;
+  }
+
+  url.searchParams.delete("email");
+  url.searchParams.delete("password");
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
 };
 
 const openResetFromUrl = () => {
@@ -1509,4 +1474,5 @@ if (activeUser) {
   showAuth();
 }
 
+clearSensitiveQueryParams();
 openResetFromUrl();
