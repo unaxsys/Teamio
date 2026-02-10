@@ -341,7 +341,9 @@ body {
 
 .board {
   display: grid;
-  grid-template-columns: repeat(4, minmax(240px, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(240px, 1fr);
+  grid-template-rows: 1fr;
   gap: 18px;
   align-items: start;
   overflow-x: auto;
