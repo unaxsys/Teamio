@@ -848,6 +848,8 @@ const renderTeams = () => {
   members.forEach((member) => {
     const item = document.createElement("div");
     item.className = "panel-list__item";
+    item.draggable = true;
+    item.dataset.memberId = member.id;
 
     const teamNames = (member.teamIds ?? [])
       .map((teamId) => teams.find((team) => team.id === teamId)?.name)
@@ -855,7 +857,17 @@ const renderTeams = () => {
       .join(", ");
 
     const info = document.createElement("div");
-    info.innerHTML = `<strong>${member.name}</strong><div class="panel-list__meta">${member.role} • ${teamNames || "Без екип"}</div>`;
+    info.innerHTML = `<strong>${member.name}</strong><div class="panel-list__meta">${member.role} • ${teamNames || "Без екип"}</div><div class="panel-list__meta">Влачи към екип за присвояване</div>`;
+
+    item.addEventListener("dragstart", (event) => {
+      event.dataTransfer.setData("application/x-teamio-member", member.id);
+      event.dataTransfer.effectAllowed = "move";
+      item.classList.add("panel-list__item--dragging");
+    });
+
+    item.addEventListener("dragend", () => {
+      item.classList.remove("panel-list__item--dragging");
+    });
 
     const remove = document.createElement("button");
     remove.type = "button";
@@ -889,8 +901,56 @@ const renderTeams = () => {
     teams.forEach((team) => {
       const teamCard = document.createElement("div");
       teamCard.className = "panel-list__item";
+      teamCard.dataset.teamId = team.id;
       const count = members.filter((member) => (member.teamIds ?? []).includes(team.id)).length;
-      teamCard.innerHTML = `<div><strong>${team.name}</strong><div class="panel-list__meta">${count} човека</div></div>`;
+      teamCard.innerHTML = `<div><strong>${team.name}</strong><div class="panel-list__meta">${count} човека</div><div class="panel-list__meta">Пусни човек тук</div></div>`;
+
+      teamCard.addEventListener("dragover", (event) => {
+        if (!event.dataTransfer.types.includes("application/x-teamio-member")) {
+          return;
+        }
+        event.preventDefault();
+        teamCard.classList.add("panel-list__item--drop-target");
+      });
+
+      teamCard.addEventListener("dragleave", () => {
+        teamCard.classList.remove("panel-list__item--drop-target");
+      });
+
+      teamCard.addEventListener("drop", (event) => {
+        event.preventDefault();
+        teamCard.classList.remove("panel-list__item--drop-target");
+        const memberId = event.dataTransfer.getData("application/x-teamio-member");
+        if (!memberId) {
+          return;
+        }
+
+        const updatedAccounts = loadAccounts().map((entry) => {
+          if (entry.id !== account.id) {
+            return entry;
+          }
+
+          const updatedMembers = (entry.members ?? []).map((member) => {
+            if (member.id !== memberId) {
+              return member;
+            }
+
+            const existingTeamIds = member.teamIds ?? [];
+            if (existingTeamIds.includes(team.id)) {
+              return member;
+            }
+
+            return { ...member, teamIds: [...existingTeamIds, team.id] };
+          });
+
+          return { ...entry, members: updatedMembers };
+        });
+
+        saveAccounts(updatedAccounts);
+        renderTeams();
+        updateReports();
+      });
+
       teamCatalog.append(teamCard);
     });
   }
