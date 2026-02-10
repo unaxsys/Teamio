@@ -19,6 +19,23 @@ npm start
 
 > Note: The desktop app loads the same `web/index.html` file to keep the experience consistent across platforms.
 
+## Temporary hosting (GitHub Pages)
+A GitHub Actions workflow is included at `.github/workflows/deploy-web.yml` and deploys the `web/` folder to GitHub Pages on push to `main` or `work` (and can also be started manually).
+
+### One-time setup
+1. In GitHub, open **Settings → Pages**.
+2. Under **Build and deployment**, choose **Source: GitHub Actions**.
+3. Push to `main` or `work` (or run the workflow manually from **Actions**).
+
+After deploy, the app will be available at:
+`https://unaxsys.github.io/Teamio/`
+
+### If you get 404
+- Open exactly this URL (without extra symbols/text): `https://unaxsys.github.io/Teamio/`
+- In **Actions**, confirm the workflow **Deploy web to GitHub Pages** has a successful run.
+- In **Settings → Pages**, confirm source is **GitHub Actions**.
+- Wait 1–3 minutes after a successful deploy and refresh.
+
 ## Syncing with Pull Requests
 If you open a PR on GitHub, your local files will only update after you fetch the branch or pull the merge result.
 
