@@ -43,6 +43,7 @@ const teamCreateModal = document.getElementById("team-create-modal");
 const memberCreateModal = document.getElementById("member-create-modal");
 const closeTeamCreateModalButton = document.getElementById("close-team-create-modal");
 const closeMemberCreateModalButton = document.getElementById("close-member-create-modal");
+const teamFormSubmitButton = teamForm?.querySelector("button[type=\"submit\"]");
 const calendarForm = document.getElementById("calendar-form");
 const calendarList = document.getElementById("calendar-list");
 const calendarGrid = document.getElementById("calendar-grid");
@@ -176,11 +177,13 @@ const saveUsers = (users) => {
   localStorage.setItem("teamio-users", JSON.stringify(users));
 };
 
-const loadAccounts = () => JSON.parse(localStorage.getItem("teamio-accounts") ?? "[]");
+function loadAccounts() {
+  return JSON.parse(localStorage.getItem("teamio-accounts") ?? "[]");
+}
 
-const saveAccounts = (accounts) => {
+function saveAccounts(accounts) {
   localStorage.setItem("teamio-accounts", JSON.stringify(accounts));
-};
+}
 
 const getCurrentAccount = () => {
   const user = loadCurrentUser();
@@ -230,56 +233,6 @@ const ensureAccountForUser = (user) => {
   const nextUser = { ...user, accountId };
   setCurrentUser(nextUser);
   return nextUser;
-};
-
-const getSelectedValues = (selectEl) =>
-  Array.from(selectEl?.selectedOptions ?? [])
-    .map((option) => option.value)
-    .filter(Boolean);
-
-const syncTeamSelectors = () => {
-  const account = getCurrentAccount();
-  const teams = account?.teams ?? [];
-
-  [memberTeamIdsSelect, taskTeamIdsSelect, boardTeamFilter].forEach((selectEl) => {
-    if (!selectEl) {
-      return;
-    }
-    const selected = new Set(getSelectedValues(selectEl));
-    selectEl.innerHTML = "";
-    teams.forEach((team) => {
-      const option = document.createElement("option");
-      option.value = team.id;
-      option.textContent = team.name;
-      option.selected = selected.has(team.id);
-      selectEl.append(option);
-    });
-  });
-};
-
-const getVisibleTasks = () => {
-  const user = loadCurrentUser();
-  const allTasks = loadTasks();
-  const accountTasks = allTasks.filter((task) => !user?.accountId || task.accountId === user.accountId);
-  const selectedTeamIds = getSelectedValues(boardTeamFilter);
-  if (selectedTeamIds.length === 0) {
-    return accountTasks;
-  }
-  return accountTasks.filter((task) => (task.teamIds ?? []).some((teamId) => selectedTeamIds.includes(teamId)));
-};
-
-const loadAccounts = () => JSON.parse(localStorage.getItem("teamio-accounts") ?? "[]");
-
-const saveAccounts = (accounts) => {
-  localStorage.setItem("teamio-accounts", JSON.stringify(accounts));
-};
-
-const getCurrentAccount = () => {
-  const user = loadCurrentUser();
-  if (!user?.accountId) {
-    return null;
-  }
-  return loadAccounts().find((account) => account.id === user.accountId) ?? null;
 };
 
 const getSelectedValues = (selectEl) =>
@@ -817,32 +770,50 @@ const renderBoard = (tasks) => {
   updateReports();
 };
 
-const openGroupMembers = (groupId) => {
-  const members = loadTeams().filter((member) => (member.group ?? "product") === groupId);
-  groupMembersTitle.textContent = `${groupLabels[groupId] ?? "Екип"} – хора`;
-  groupMembersList.innerHTML = "";
+let openedTeamId = null;
 
-  if (members.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "panel-list__meta";
-    empty.textContent = "Няма добавени хора в тази група.";
-    groupMembersList.append(empty);
-  } else {
-    members.forEach((member) => {
-      const item = document.createElement("div");
-      item.className = "panel-list__item";
-      item.innerHTML = `<div><strong>${member.name}</strong><div class="panel-list__meta">${member.role}</div></div>`;
-      groupMembersList.append(item);
-    });
+const findMemberById = (memberId) => {
+  const account = getCurrentAccount();
+  return (account?.members ?? []).find((member) => member.id === memberId) ?? null;
+};
+
+const openMemberEditor = (member) => {
+  if (!teamForm || !member) {
+    return;
   }
+  teamForm.reset();
+  teamForm.querySelector('input[name="memberId"]').value = member.id;
+  teamForm.querySelector('input[name="name"]').value = member.name;
+  teamForm.querySelector('input[name="role"]').value = member.role;
+  syncTeamSelectors();
+  Array.from(memberTeamIdsSelect?.options ?? []).forEach((option) => {
+    option.selected = (member.teamIds ?? []).includes(option.value);
+  });
+  if (teamFormSubmitButton) {
+    teamFormSubmitButton.textContent = "Запази";
+  }
+  openModal(memberCreateModal);
+};
 
-  openModal(groupMembersModal);
+const resetMemberFormState = () => {
+  teamForm?.reset();
+  if (teamFormSubmitButton) {
+    teamFormSubmitButton.textContent = "Добави";
+  }
+  const hidden = teamForm?.querySelector('input[name="memberId"]');
+  if (hidden) {
+    hidden.value = "";
+  }
 };
 
 const renderTeams = () => {
   const account = getCurrentAccount();
   const members = account?.members ?? [];
   const teams = account?.teams ?? [];
+
+  if (openedTeamId && !teams.some((team) => team.id === openedTeamId)) {
+    openedTeamId = null;
+  }
 
   teamList.innerHTML = "";
   if (members.length === 0) {
@@ -864,6 +835,15 @@ const renderTeams = () => {
     const info = document.createElement("div");
     info.innerHTML = `<strong>${member.name}</strong><div class="panel-list__meta">${member.role} • ${teamNames || "Без екип"}</div>`;
 
+    const actions = document.createElement("div");
+    actions.className = "panel-list__actions";
+
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "panel-list__edit";
+    edit.textContent = "Редакция";
+    edit.addEventListener("click", () => openMemberEditor(member));
+
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "panel-list__remove";
@@ -879,7 +859,8 @@ const renderTeams = () => {
       updateReports();
     });
 
-    item.append(info, remove);
+    actions.append(edit, remove);
+    item.append(info, actions);
     teamList.append(item);
   });
 
@@ -894,11 +875,70 @@ const renderTeams = () => {
     }
 
     teams.forEach((team) => {
-      const teamCard = document.createElement("div");
-      teamCard.className = "panel-list__item";
       const count = members.filter((member) => (member.teamIds ?? []).includes(team.id)).length;
-      teamCard.innerHTML = `<div><strong>${team.name}</strong><div class="panel-list__meta">${count} човека</div></div>`;
-      teamCatalog.append(teamCard);
+      const membersInTeam = members.filter((member) => (member.teamIds ?? []).includes(team.id));
+      const isOpen = openedTeamId === team.id;
+
+      const teamWrap = document.createElement("div");
+      teamWrap.className = "team-card";
+
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "team-card__row";
+      row.innerHTML = `<div><strong>${team.name}</strong><div class="panel-list__meta">${count} човека</div></div><span>${isOpen ? "▾" : "▸"}</span>`;
+      row.addEventListener("click", () => {
+        openedTeamId = openedTeamId === team.id ? null : team.id;
+        renderTeams();
+      });
+
+      teamWrap.append(row);
+
+      if (isOpen) {
+        const details = document.createElement("div");
+        details.className = "team-card__details";
+
+        if (membersInTeam.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "panel-list__meta";
+          empty.textContent = "Няма хора в този екип.";
+          details.append(empty);
+        } else {
+          membersInTeam.forEach((member) => {
+            const item = document.createElement("div");
+            item.className = "team-member-row";
+            const info = document.createElement("span");
+            info.textContent = `${member.name} • ${member.role}`;
+            const actions = document.createElement("div");
+            actions.className = "team-member-row__actions";
+            const edit = document.createElement("button");
+            edit.type = "button";
+            edit.className = "panel-list__edit";
+            edit.textContent = "Редакция";
+            edit.addEventListener("click", () => openMemberEditor(member));
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "panel-list__remove";
+            remove.textContent = "Премахни";
+            remove.addEventListener("click", () => {
+              const accounts = loadAccounts().map((entry) =>
+                entry.id === account.id
+                  ? { ...entry, members: (entry.members ?? []).filter((current) => current.id !== member.id) }
+                  : entry
+              );
+              saveAccounts(accounts);
+              renderTeams();
+              updateReports();
+            });
+            actions.append(edit, remove);
+            item.append(info, actions);
+            details.append(item);
+          });
+        }
+
+        teamWrap.append(details);
+      }
+
+      teamCatalog.append(teamWrap);
     });
   }
 
@@ -1106,7 +1146,7 @@ openTeamCreateModalButton?.addEventListener("click", () => {
 
 openMemberCreateModalButton?.addEventListener("click", () => {
   syncTeamSelectors();
-  teamForm?.reset();
+  resetMemberFormState();
   openModal(memberCreateModal);
 });
 
@@ -1116,6 +1156,7 @@ closeTeamCreateModalButton?.addEventListener("click", () => {
 
 closeMemberCreateModalButton?.addEventListener("click", () => {
   closeModal(memberCreateModal);
+  resetMemberFormState();
 });
 
 teamCreateModal?.addEventListener("click", (event) => {
@@ -1127,6 +1168,7 @@ teamCreateModal?.addEventListener("click", (event) => {
 memberCreateModal?.addEventListener("click", (event) => {
   if (event.target === memberCreateModal) {
     closeModal(memberCreateModal);
+    resetMemberFormState();
   }
 });
 
@@ -1170,21 +1212,35 @@ teamForm?.addEventListener("submit", (event) => {
   if (selectedTeamIds.length === 0) {
     return;
   }
-  const newMember = {
-    id: `member-${Date.now()}`,
+
+  const memberId = normalizeText(formData.get("memberId")?.toString() ?? "");
+  const memberData = {
+    id: memberId || `member-${Date.now()}`,
     name: normalizeText(formData.get("name")?.toString() ?? ""),
     role: normalizeText(formData.get("role")?.toString() ?? ""),
     teamIds: selectedTeamIds,
   };
-  if (!newMember.name || !newMember.role) {
+
+  if (!memberData.name || !memberData.role) {
     return;
   }
-  const updatedAccounts = loadAccounts().map((entry) =>
-    entry.id === account.id ? { ...entry, members: [...(entry.members ?? []), newMember] } : entry
-  );
+
+  const updatedAccounts = loadAccounts().map((entry) => {
+    if (entry.id !== account.id) {
+      return entry;
+    }
+    if (memberId) {
+      return {
+        ...entry,
+        members: (entry.members ?? []).map((member) => (member.id === memberId ? memberData : member)),
+      };
+    }
+    return { ...entry, members: [...(entry.members ?? []), memberData] };
+  });
+
   saveAccounts(updatedAccounts);
-  teamForm.reset();
   closeModal(memberCreateModal);
+  resetMemberFormState();
   renderTeams();
   updateReports();
 });
