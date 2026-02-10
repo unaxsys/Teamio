@@ -176,22 +176,30 @@
                 Роля
                 <input type="text" name="role" placeholder="Продукт, QA, Дизайн" required />
               </label>
-              <button type="submit" class="primary">Добави човек</button>
+              <label>
+                Група
+                <select name="group">
+                  <option value="product">Продуктов екип</option>
+                  <option value="engineering">Инженерен екип</option>
+                  <option value="marketing">Маркетинг</option>
+                </select>
+              </label>
+              <button type="submit" class="primary panel-form__submit">Добави човек</button>
             </form>
             <div class="panel-list" id="team-list"></div>
             <div class="panel-grid">
-              <div class="panel-tile">
+              <button type="button" class="panel-tile panel-tile--button" data-group="product">
                 <h3>Продуктов екип</h3>
                 <p>Дизайн, UX, продуктови цели и експерименти.</p>
-              </div>
-              <div class="panel-tile">
+              </button>
+              <button type="button" class="panel-tile panel-tile--button" data-group="engineering">
                 <h3>Инженерен екип</h3>
                 <p>Спринтове, код ревюта и релийз планиране.</p>
-              </div>
-              <div class="panel-tile">
+              </button>
+              <button type="button" class="panel-tile panel-tile--button" data-group="marketing">
                 <h3>Маркетинг</h3>
                 <p>Кампании, съдържание и анализи.</p>
-              </div>
+              </button>
             </div>
           </div>
         </section>
@@ -209,31 +217,28 @@
                 Дата
                 <input type="date" name="date" required />
               </label>
-              <button type="submit" class="primary">Добави събитие</button>
+              <button type="submit" class="primary panel-form__submit">Добави събитие</button>
             </form>
             <div class="panel-list" id="calendar-list"></div>
-            <div class="calendar-grid">
-              <div class="calendar-day">
-                <h4>Пон</h4>
-                <span>Планиране на седмицата</span>
-              </div>
-              <div class="calendar-day">
-                <h4>Вт</h4>
-                <span>Демо на прототип</span>
-              </div>
-              <div class="calendar-day">
-                <h4>Ср</h4>
-                <span>Екипен синк</span>
-              </div>
-              <div class="calendar-day">
-                <h4>Чт</h4>
-                <span>QA и тестове</span>
-              </div>
-              <div class="calendar-day">
-                <h4>Пет</h4>
-                <span>Release</span>
+            <div class="calendar-toolbar">
+              <label>
+                Изглед
+                <select id="calendar-view">
+                  <option value="week">Седмица</option>
+                  <option value="month">Месец</option>
+                </select>
+              </label>
+              <label>
+                Отиди на дата
+                <input type="date" id="calendar-focus-date" />
+              </label>
+              <div class="calendar-toolbar__actions">
+                <button type="button" class="ghost" id="calendar-prev">Назад</button>
+                <button type="button" class="ghost" id="calendar-today">Днес</button>
+                <button type="button" class="ghost" id="calendar-next">Напред</button>
               </div>
             </div>
+            <div class="calendar-grid" id="calendar-grid"></div>
           </div>
         </section>
 
@@ -286,12 +291,29 @@
                 </div>
               </div>
               <div class="setting-item">
-                <h4>Синхронизация</h4>
-                <p>Локално съхранение и готовност за desktop.</p>
-                <div class="sync__status">
-                  <span class="sync__dot"></span>
-                  <span>Активна</span>
-                </div>
+                <h4>Календар и отчети</h4>
+                <p>Контролирай началния ден, уикенд оцветяване и критерия за завършени задачи.</p>
+                <label>
+                  Начален ден на седмицата
+                  <select id="week-start-day">
+                    <option value="monday">Понеделник</option>
+                    <option value="sunday">Неделя</option>
+                    <option value="saturday">Събота</option>
+                  </select>
+                </label>
+                <label class="setting-check">
+                  <input type="checkbox" id="setting-highlight-weekend" checked />
+                  Оцветявай събота и неделя различно
+                </label>
+                <label class="setting-check">
+                  <input type="checkbox" id="setting-done-by-column" checked />
+                  Завършена задача, ако е в колона „Готово“
+                </label>
+                <label class="setting-check">
+                  <input type="checkbox" id="setting-done-by-flag" />
+                  Завършена задача, ако е маркирана в детайлите
+                </label>
+                <p class="panel-list__meta" id="done-criteria-help"></p>
               </div>
             </div>
           </div>
@@ -324,11 +346,66 @@
               <option value="done">Готово</option>
             </select>
           </label>
+          <label>
+            Ниво
+            <select name="level">
+              <option value="L1">L1 – Стратегическо</option>
+              <option value="L2" selected>L2 – Оперативно</option>
+              <option value="L3">L3 – Детайлно</option>
+            </select>
+          </label>
           <div class="modal__actions">
             <button type="button" class="ghost" id="close-modal">Отказ</button>
             <button type="submit" class="primary">Добави</button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <div class="modal" id="task-details-modal">
+      <div class="modal__card modal__card--wide">
+        <h2>Детайли за задача</h2>
+        <form id="task-details-form">
+          <input type="hidden" name="taskId" />
+          <label>
+            Заглавие
+            <input type="text" name="title" required />
+          </label>
+          <label>
+            Описание
+            <textarea name="description" rows="8"></textarea>
+          </label>
+          <label>
+            Срок
+            <input type="date" name="due" />
+          </label>
+          <label>
+            Ниво
+            <select name="level">
+              <option value="L1">L1 – Стратегическо</option>
+              <option value="L2">L2 – Оперативно</option>
+              <option value="L3">L3 – Детайлно</option>
+            </select>
+          </label>
+          <label class="setting-check">
+            <input type="checkbox" name="completed" />
+            Маркирай като завършена
+          </label>
+          <div class="modal__actions">
+            <button type="button" class="ghost" id="close-task-details">Затвори</button>
+            <button type="submit" class="primary">Запази</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal" id="group-members-modal">
+      <div class="modal__card">
+        <h2 id="group-members-title">Членове на група</h2>
+        <div class="panel-list" id="group-members-list"></div>
+        <div class="modal__actions">
+          <button type="button" class="ghost" id="close-group-members">Затвори</button>
+        </div>
       </div>
     </div>
 

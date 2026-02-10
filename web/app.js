@@ -33,9 +33,30 @@ const teamForm = document.getElementById("team-form");
 const teamList = document.getElementById("team-list");
 const calendarForm = document.getElementById("calendar-form");
 const calendarList = document.getElementById("calendar-list");
+const calendarGrid = document.getElementById("calendar-grid");
+const calendarViewSelect = document.getElementById("calendar-view");
+const calendarFocusDateInput = document.getElementById("calendar-focus-date");
+const calendarPrevButton = document.getElementById("calendar-prev");
+const calendarTodayButton = document.getElementById("calendar-today");
+const calendarNextButton = document.getElementById("calendar-next");
 const reportDone = document.getElementById("report-done");
 const reportActive = document.getElementById("report-active");
 const reportVelocity = document.getElementById("report-velocity");
+
+const taskDetailsModal = document.getElementById("task-details-modal");
+const taskDetailsForm = document.getElementById("task-details-form");
+const closeTaskDetailsButton = document.getElementById("close-task-details");
+const groupTiles = document.querySelectorAll(".panel-tile--button");
+const groupMembersModal = document.getElementById("group-members-modal");
+const groupMembersTitle = document.getElementById("group-members-title");
+const groupMembersList = document.getElementById("group-members-list");
+const closeGroupMembersButton = document.getElementById("close-group-members");
+const weekStartDaySelect = document.getElementById("week-start-day");
+const highlightWeekendCheckbox = document.getElementById("setting-highlight-weekend");
+const doneByColumnCheckbox = document.getElementById("setting-done-by-column");
+const doneByFlagCheckbox = document.getElementById("setting-done-by-flag");
+const doneCriteriaHelp = document.getElementById("done-criteria-help");
+
 
 const defaultColumns = [
   { id: "backlog", title: "Backlog", color: "#5b6bff" },
@@ -54,6 +75,8 @@ const defaultTasks = [
     due: "2024-06-18",
     column: "backlog",
     tag: "UX",
+    level: "L1",
+    completed: false,
   },
   {
     id: "task-2",
@@ -62,6 +85,8 @@ const defaultTasks = [
     due: "2024-06-19",
     column: "progress",
     tag: "Екип",
+    level: "L2",
+    completed: false,
   },
   {
     id: "task-3",
@@ -70,6 +95,8 @@ const defaultTasks = [
     due: "2024-06-21",
     column: "review",
     tag: "QA",
+    level: "L3",
+    completed: false,
   },
   {
     id: "task-4",
@@ -78,8 +105,45 @@ const defaultTasks = [
     due: "2024-06-25",
     column: "done",
     tag: "Release",
+    level: "L2",
+    completed: true,
   },
 ];
+
+
+const levelOrder = { L1: 1, L2: 2, L3: 3 };
+
+const calendarState = {
+  view: localStorage.getItem("teamio-calendar-view") ?? "week",
+  focusDate: localStorage.getItem("teamio-calendar-focus") ?? new Date().toISOString().slice(0, 10),
+};
+
+const groupLabels = {
+  product: "Продуктов екип",
+  engineering: "Инженерен екип",
+  marketing: "Маркетинг",
+};
+
+const loadPreferences = () => {
+  const defaults = {
+    weekStartDay: "monday",
+    highlightWeekend: true,
+    doneByColumn: true,
+    doneByFlag: false,
+  };
+  const stored = localStorage.getItem("teamio-preferences");
+  if (!stored) {
+    localStorage.setItem("teamio-preferences", JSON.stringify(defaults));
+    return defaults;
+  }
+  return { ...defaults, ...JSON.parse(stored) };
+};
+
+const savePreferences = (preferences) => {
+  localStorage.setItem("teamio-preferences", JSON.stringify(preferences));
+};
+
+let preferences = loadPreferences();
 
 const loadColumns = () => {
   const stored = localStorage.getItem("teamio-columns");
@@ -100,7 +164,11 @@ const saveUsers = (users) => {
   localStorage.setItem("teamio-users", JSON.stringify(users));
 };
 
-const loadTeams = () => JSON.parse(localStorage.getItem("teamio-teams") ?? "[]");
+const loadTeams = () =>
+  JSON.parse(localStorage.getItem("teamio-teams") ?? "[]").map((member) => ({
+    ...member,
+    group: member.group ?? "product",
+  }));
 
 const saveTeams = (teams) => {
   localStorage.setItem("teamio-teams", JSON.stringify(teams));
@@ -110,6 +178,32 @@ const loadCalendar = () => JSON.parse(localStorage.getItem("teamio-calendar") ??
 
 const saveCalendar = (items) => {
   localStorage.setItem("teamio-calendar", JSON.stringify(items));
+};
+
+const normalizeEmail = (email) => email.trim().toLowerCase();
+
+const normalizeText = (value) => value.trim();
+
+const loadApiBase = () => localStorage.getItem("teamio-api-base") ?? "";
+
+const apiRequest = async (path, options = {}) => {
+  const base = loadApiBase();
+  if (!base) {
+    return null;
+  }
+  try {
+    const response = await fetch(`${base}${path}`, {
+      headers: { "Content-Type": "application/json", ...(options.headers ?? {}) },
+      ...options,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      return { ok: false, data };
+    }
+    return { ok: true, data };
+  } catch (error) {
+    return { ok: false, data: { message: "Сървърът не е достъпен." } };
+  }
 };
 
 const hashPassword = async (password) => {
@@ -166,6 +260,20 @@ const showAuth = () => {
 };
 
 const handleLogin = async (email, password) => {
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedPassword = normalizeText(password);
+  const apiResult = await apiRequest("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email: normalizedEmail, password: normalizedPassword }),
+  });
+
+  if (apiResult?.ok && apiResult.data?.user) {
+    setCurrentUser(apiResult.data.user);
+    setAuthMessage("");
+    showApp(apiResult.data.user);
+    return;
+  }
+
   const users = loadUsers();
   if (users.length === 0) {
     setAuthMessage("Нямаш акаунт. Регистрирай се, за да влезеш.");
@@ -176,25 +284,57 @@ const handleLogin = async (email, password) => {
     );
     return;
   }
-  const hashed = await hashPassword(password);
-  const user = users.find((item) => item.email === email && item.password === hashed);
+
+  const hashed = await hashPassword(normalizedPassword);
+  const user = users.find(
+    (item) => normalizeEmail(item.email) === normalizedEmail && (item.password === hashed || item.password === normalizedPassword)
+  );
+
   if (!user) {
-    setAuthMessage("Невалидни данни. Провери имейла и паролата.");
+    setAuthMessage(apiResult?.data?.message ?? "Невалидни данни. Провери имейла и паролата.");
     return;
   }
+
+  if (user.password === normalizedPassword) {
+    user.password = hashed;
+    saveUsers(users);
+  }
+
   setCurrentUser(user);
   setAuthMessage("");
   showApp(user);
 };
 
 const handleRegister = async (name, email, password) => {
-  const users = loadUsers();
-  if (users.some((item) => item.email === email)) {
-    setAuthMessage("Този имейл вече е регистриран.");
+  const normalizedName = normalizeText(name);
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedPassword = normalizeText(password);
+
+  if (!normalizedName || !normalizedEmail || normalizedPassword.length < 6) {
+    setAuthMessage("Попълни коректно всички полета.");
     return;
   }
-  const hashed = await hashPassword(password);
-  const newUser = { id: `user-${Date.now()}`, name, email, password: hashed };
+
+  const apiResult = await apiRequest("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ name: normalizedName, email: normalizedEmail, password: normalizedPassword }),
+  });
+
+  if (apiResult?.ok && apiResult.data?.user) {
+    setCurrentUser(apiResult.data.user);
+    setAuthMessage("");
+    showApp(apiResult.data.user);
+    return;
+  }
+
+  const users = loadUsers();
+  if (users.some((item) => normalizeEmail(item.email) === normalizedEmail)) {
+    setAuthMessage(apiResult?.data?.message ?? "Този имейл вече е регистриран.");
+    return;
+  }
+
+  const hashed = await hashPassword(normalizedPassword);
+  const newUser = { id: `user-${Date.now()}`, name: normalizedName, email: normalizedEmail, password: hashed };
   const updated = [...users, newUser];
   saveUsers(updated);
   setCurrentUser(newUser);
@@ -218,18 +358,29 @@ const generateToken = () => {
     .join("");
 };
 
-const requestPasswordReset = (email) => {
+const requestPasswordReset = async (email) => {
+  const normalizedEmail = normalizeEmail(email);
+  const apiResult = await apiRequest("/api/auth/forgot-password", {
+    method: "POST",
+    body: JSON.stringify({ email: normalizedEmail }),
+  });
+
+  if (apiResult?.ok) {
+    resetLinkEl.textContent = "Ако имейлът съществува, изпратихме линк за смяна на парола.";
+    return;
+  }
+
   const users = loadUsers();
-  const user = users.find((item) => item.email === email);
+  const user = users.find((item) => normalizeEmail(item.email) === normalizedEmail);
   if (!user) {
-    resetLinkEl.textContent = "Няма потребител с този имейл.";
+    resetLinkEl.textContent = "Ако имейлът съществува, изпратихме линк за смяна на парола.";
     return;
   }
   const tokens = loadResetTokens();
   const token = generateToken();
-  tokens.push({ token, email, createdAt: Date.now() });
+  tokens.push({ token, email: normalizedEmail, createdAt: Date.now() });
   saveResetTokens(tokens);
-  resetLinkEl.textContent = `Линк за смяна на парола (демо): ${window.location.origin}${window.location.pathname}?reset=${token}`;
+  resetLinkEl.textContent = "Линкът за смяна е генериран в демо режим (без реално изпращане на имейл).";
 };
 
 const openResetFromUrl = () => {
@@ -276,7 +427,11 @@ const loadTasks = () => {
     localStorage.setItem("teamio-tasks", JSON.stringify(defaultTasks));
     return [...defaultTasks];
   }
-  return JSON.parse(stored);
+  return JSON.parse(stored).map((task) => ({
+    ...task,
+    level: task.level ?? "L2",
+    completed: Boolean(task.completed),
+  }));
 };
 
 const saveTasks = (tasks) => {
@@ -292,20 +447,47 @@ const closeTaskModal = () => {
   formEl.reset();
 };
 
+const openTaskDetails = (taskId) => {
+  const tasks = loadTasks();
+  const task = tasks.find((entry) => entry.id === taskId);
+  if (!task || !taskDetailsForm) {
+    return;
+  }
+
+  taskDetailsForm.querySelector('input[name="taskId"]').value = task.id;
+  taskDetailsForm.querySelector('input[name="title"]').value = task.title;
+  taskDetailsForm.querySelector('textarea[name="description"]').value = task.description ?? "";
+  taskDetailsForm.querySelector('input[name="due"]').value = task.due ?? "";
+  taskDetailsForm.querySelector('select[name="level"]').value = task.level ?? "L2";
+  taskDetailsForm.querySelector('input[name="completed"]').checked = Boolean(task.completed);
+  openModal(taskDetailsModal);
+};
+
 const createCard = (task, columnColor) => {
   const card = document.createElement("article");
   card.className = "card";
+  const level = task.level ?? "L2";
+  card.classList.add(`card--${level.toLowerCase()}`);
   card.draggable = true;
   card.dataset.taskId = task.id;
   card.style.setProperty("--card-accent", columnColor ?? "#5b6bff");
+
+  const titleRow = document.createElement("div");
+  titleRow.className = "card__title-row";
 
   const title = document.createElement("div");
   title.className = "card__title";
   title.textContent = task.title;
 
+  const levelBadge = document.createElement("span");
+  levelBadge.className = "card__level";
+  levelBadge.textContent = level;
+
+  titleRow.append(title, levelBadge);
+
   const desc = document.createElement("p");
-  desc.className = "card__desc";
-  desc.textContent = task.description;
+  desc.className = "card__desc card__desc--clamp";
+  desc.textContent = task.description || "Без описание";
 
   const footer = document.createElement("div");
   footer.className = "card__footer";
@@ -318,10 +500,14 @@ const createCard = (task, columnColor) => {
   due.textContent = task.due ? new Date(task.due).toLocaleDateString("bg-BG") : "Без срок";
 
   footer.append(tag, due);
-  card.append(title, desc, footer);
+  card.append(titleRow, desc, footer);
 
   card.addEventListener("dragstart", (event) => {
     event.dataTransfer.setData("text/plain", task.id);
+  });
+
+  card.addEventListener("click", () => {
+    openTaskDetails(task.id);
   });
 
   return card;
@@ -357,11 +543,24 @@ const renderBoard = (tasks) => {
 
     const count = document.createElement("span");
     count.className = "column__count";
-    const columnTasks = tasks.filter((task) => task.column === column.id);
+    const columnTasks = tasks
+      .filter((task) => task.column === column.id)
+      .sort((a, b) => (levelOrder[a.level ?? "L2"] ?? 2) - (levelOrder[b.level ?? "L2"] ?? 2));
     count.textContent = `${columnTasks.length} задачи`;
 
     const actions = document.createElement("div");
     actions.className = "column__actions";
+
+    const dragButton = document.createElement("button");
+    dragButton.type = "button";
+    dragButton.className = "column__drag";
+    dragButton.textContent = "☰";
+    dragButton.draggable = true;
+    dragButton.title = "Премести колона";
+    dragButton.addEventListener("dragstart", (event) => {
+      event.dataTransfer.setData("application/x-teamio-column", column.id);
+      event.dataTransfer.effectAllowed = "move";
+    });
 
     const renameButton = document.createElement("button");
     renameButton.type = "button";
@@ -379,7 +578,7 @@ const renderBoard = (tasks) => {
       renderBoard(tasks);
     });
 
-    actions.append(count, renameButton);
+    actions.append(count, dragButton, renameButton);
     header.append(titleWrap, actions);
     columnEl.append(header);
 
@@ -389,11 +588,42 @@ const renderBoard = (tasks) => {
 
     columnEl.addEventListener("dragover", (event) => {
       event.preventDefault();
+      if (event.dataTransfer.types.includes("application/x-teamio-column")) {
+        columnEl.classList.add("column--drag-over");
+      }
+    });
+
+    columnEl.addEventListener("dragleave", () => {
+      columnEl.classList.remove("column--drag-over");
     });
 
     columnEl.addEventListener("drop", (event) => {
       event.preventDefault();
+      columnEl.classList.remove("column--drag-over");
+
+      const draggedColumnId = event.dataTransfer.getData("application/x-teamio-column");
+      if (draggedColumnId) {
+        if (draggedColumnId === column.id) {
+          return;
+        }
+        const columns = loadColumns();
+        const sourceIndex = columns.findIndex((entry) => entry.id === draggedColumnId);
+        const targetIndex = columns.findIndex((entry) => entry.id === column.id);
+        if (sourceIndex === -1 || targetIndex === -1) {
+          return;
+        }
+        const nextColumns = [...columns];
+        const [moved] = nextColumns.splice(sourceIndex, 1);
+        nextColumns.splice(targetIndex, 0, moved);
+        saveColumns(nextColumns);
+        renderBoard(loadTasks());
+        return;
+      }
+
       const taskId = event.dataTransfer.getData("text/plain");
+      if (!taskId) {
+        return;
+      }
       const updated = tasks.map((task) =>
         task.id === taskId ? { ...task, column: column.id } : task
       );
@@ -415,6 +645,28 @@ const renderBoard = (tasks) => {
   updateReports();
 };
 
+const openGroupMembers = (groupId) => {
+  const members = loadTeams().filter((member) => (member.group ?? "product") === groupId);
+  groupMembersTitle.textContent = `${groupLabels[groupId] ?? "Екип"} – хора`;
+  groupMembersList.innerHTML = "";
+
+  if (members.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "panel-list__meta";
+    empty.textContent = "Няма добавени хора в тази група.";
+    groupMembersList.append(empty);
+  } else {
+    members.forEach((member) => {
+      const item = document.createElement("div");
+      item.className = "panel-list__item";
+      item.innerHTML = `<div><strong>${member.name}</strong><div class="panel-list__meta">${member.role}</div></div>`;
+      groupMembersList.append(item);
+    });
+  }
+
+  openModal(groupMembersModal);
+};
+
 const renderTeams = () => {
   const teams = loadTeams();
   teamList.innerHTML = "";
@@ -423,7 +675,8 @@ const renderTeams = () => {
     item.className = "panel-list__item";
 
     const info = document.createElement("div");
-    info.innerHTML = `<strong>${member.name}</strong><div class="panel-list__meta">${member.role}</div>`;
+    const label = groupLabels[member.group ?? "product"] ?? "Екип";
+    info.innerHTML = `<strong>${member.name}</strong><div class="panel-list__meta">${member.role} · ${label}</div>`;
 
     const remove = document.createElement("button");
     remove.type = "button";
@@ -440,8 +693,111 @@ const renderTeams = () => {
   });
 };
 
+const parseDateOnly = (dateString) => {
+  const [year, month, day] = dateString.split("-").map(Number);
+  return new Date(year, month - 1, day);
+};
+
+const formatDateOnly = (date) => {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const startOfWeek = (date) => {
+  const result = new Date(date);
+  const day = result.getDay();
+  const desiredStart =
+    preferences.weekStartDay === "sunday" ? 0 : preferences.weekStartDay === "saturday" ? 6 : 1;
+  const offset = (day - desiredStart + 7) % 7;
+  result.setDate(result.getDate() - offset);
+  result.setHours(0, 0, 0, 0);
+  return result;
+};
+
+const renderCalendarGrid = (items) => {
+  if (!calendarGrid) {
+    return;
+  }
+
+  calendarGrid.innerHTML = "";
+  const focus = parseDateOnly(calendarState.focusDate);
+  const days = [];
+
+  if (calendarState.view === "month") {
+    const monthStart = new Date(focus.getFullYear(), focus.getMonth(), 1);
+    const gridStart = startOfWeek(monthStart);
+    for (let i = 0; i < 42; i += 1) {
+      const date = new Date(gridStart);
+      date.setDate(gridStart.getDate() + i);
+      days.push(date);
+    }
+  } else {
+    const weekStart = startOfWeek(focus);
+    for (let i = 0; i < 7; i += 1) {
+      const date = new Date(weekStart);
+      date.setDate(weekStart.getDate() + i);
+      days.push(date);
+    }
+  }
+
+  const grouped = items.reduce((acc, item) => {
+    const key = item.date;
+    if (!acc[key]) {
+      acc[key] = [];
+    }
+    acc[key].push(item);
+    return acc;
+  }, {});
+
+  days.forEach((date) => {
+    const key = formatDateOnly(date);
+    const dayEl = document.createElement("div");
+    dayEl.className = "calendar-day";
+    const dayNumber = date.getDay();
+    if (preferences.highlightWeekend && (dayNumber === 0 || dayNumber === 6)) {
+      dayEl.classList.add("calendar-day--weekend");
+    }
+
+    const label = document.createElement("span");
+    label.className = "calendar-day__label";
+    label.textContent = date.toLocaleDateString("bg-BG", {
+      weekday: "short",
+      day: "2-digit",
+      month: "2-digit",
+    });
+
+    if (calendarState.view === "month" && date.getMonth() !== focus.getMonth()) {
+      dayEl.classList.add("calendar-day--muted");
+    }
+
+    dayEl.append(label);
+
+    const dayItems = grouped[key] ?? [];
+    if (dayItems.length === 0) {
+      const empty = document.createElement("span");
+      empty.className = "calendar-day__item";
+      empty.textContent = "Няма събития";
+      dayEl.append(empty);
+    } else {
+      dayItems.forEach((entry) => {
+        const item = document.createElement("span");
+        item.className = "calendar-day__item";
+        item.textContent = `• ${entry.title}`;
+        dayEl.append(item);
+      });
+    }
+
+    calendarGrid.append(dayEl);
+  });
+};
+
 const renderCalendar = () => {
   const items = loadCalendar();
+  if (calendarFocusDateInput) {
+    calendarFocusDateInput.value = calendarState.focusDate;
+  }
   calendarList.innerHTML = "";
   items
     .sort((a, b) => new Date(a.date) - new Date(b.date))
@@ -465,16 +821,30 @@ const renderCalendar = () => {
       item.append(info, remove);
       calendarList.append(item);
     });
+
+  renderCalendarGrid(items);
 };
 
 const updateReports = () => {
   const tasks = loadTasks();
-  const doneCount = tasks.filter((task) => task.column === "done").length;
-  const activeCount = tasks.filter((task) => task.column !== "done").length;
+  const doneCount = tasks.filter((task) => {
+    const doneByColumn = preferences.doneByColumn && task.column === "done";
+    const doneByFlag = preferences.doneByFlag && Boolean(task.completed);
+    return doneByColumn || doneByFlag;
+  }).length;
+  const activeCount = tasks.length - doneCount;
   const teamCount = loadTeams().length;
   reportDone.textContent = doneCount.toString();
   reportActive.textContent = activeCount.toString();
   reportVelocity.textContent = teamCount > 0 ? `${Math.round((doneCount / teamCount) * 100)}%` : "0%";
+
+  const criteria = [];
+  if (preferences.doneByColumn) criteria.push('колона "Готово"');
+  if (preferences.doneByFlag) criteria.push("маркер в детайлите");
+  doneCriteriaHelp.textContent =
+    criteria.length > 0
+      ? `Критерий за завършена задача: ${criteria.join(" или ")}.`
+      : "Няма активен критерий за завършена задача.";
 };
 
 newColumnButton.addEventListener("click", () => {
@@ -532,6 +902,7 @@ teamForm.addEventListener("submit", (event) => {
     id: `member-${Date.now()}`,
     name: formData.get("name").toString(),
     role: formData.get("role").toString(),
+    group: formData.get("group")?.toString() ?? "product",
   };
   const updated = [...loadTeams(), newMember];
   saveTeams(updated);
@@ -552,6 +923,141 @@ calendarForm.addEventListener("submit", (event) => {
   saveCalendar(updated);
   calendarForm.reset();
   renderCalendar();
+});
+
+if (calendarViewSelect) {
+  calendarViewSelect.value = calendarState.view;
+}
+if (calendarFocusDateInput) {
+  calendarFocusDateInput.value = calendarState.focusDate;
+}
+
+calendarViewSelect?.addEventListener("change", () => {
+  calendarState.view = calendarViewSelect.value;
+  localStorage.setItem("teamio-calendar-view", calendarState.view);
+  renderCalendar();
+});
+
+calendarFocusDateInput?.addEventListener("change", () => {
+  if (!calendarFocusDateInput.value) {
+    return;
+  }
+  calendarState.focusDate = calendarFocusDateInput.value;
+  localStorage.setItem("teamio-calendar-focus", calendarState.focusDate);
+  renderCalendar();
+});
+
+calendarTodayButton?.addEventListener("click", () => {
+  calendarState.focusDate = new Date().toISOString().slice(0, 10);
+  localStorage.setItem("teamio-calendar-focus", calendarState.focusDate);
+  if (calendarFocusDateInput) {
+    calendarFocusDateInput.value = calendarState.focusDate;
+  }
+  renderCalendar();
+});
+
+calendarPrevButton?.addEventListener("click", () => {
+  const current = parseDateOnly(calendarState.focusDate);
+  if (calendarState.view === "month") {
+    current.setMonth(current.getMonth() - 1);
+  } else {
+    current.setDate(current.getDate() - 7);
+  }
+  calendarState.focusDate = formatDateOnly(current);
+  localStorage.setItem("teamio-calendar-focus", calendarState.focusDate);
+  if (calendarFocusDateInput) {
+    calendarFocusDateInput.value = calendarState.focusDate;
+  }
+  renderCalendar();
+});
+
+calendarNextButton?.addEventListener("click", () => {
+  const current = parseDateOnly(calendarState.focusDate);
+  if (calendarState.view === "month") {
+    current.setMonth(current.getMonth() + 1);
+  } else {
+    current.setDate(current.getDate() + 7);
+  }
+  calendarState.focusDate = formatDateOnly(current);
+  localStorage.setItem("teamio-calendar-focus", calendarState.focusDate);
+  if (calendarFocusDateInput) {
+    calendarFocusDateInput.value = calendarState.focusDate;
+  }
+  renderCalendar();
+});
+
+if (weekStartDaySelect) {
+  weekStartDaySelect.value = preferences.weekStartDay;
+}
+if (highlightWeekendCheckbox) {
+  highlightWeekendCheckbox.checked = preferences.highlightWeekend;
+}
+if (doneByColumnCheckbox) {
+  doneByColumnCheckbox.checked = preferences.doneByColumn;
+}
+if (doneByFlagCheckbox) {
+  doneByFlagCheckbox.checked = preferences.doneByFlag;
+}
+
+weekStartDaySelect?.addEventListener("change", () => {
+  preferences.weekStartDay = weekStartDaySelect.value;
+  savePreferences(preferences);
+  renderCalendar();
+});
+
+highlightWeekendCheckbox?.addEventListener("change", () => {
+  preferences.highlightWeekend = highlightWeekendCheckbox.checked;
+  savePreferences(preferences);
+  renderCalendar();
+});
+
+doneByColumnCheckbox?.addEventListener("change", () => {
+  preferences.doneByColumn = doneByColumnCheckbox.checked;
+  savePreferences(preferences);
+  updateReports();
+});
+
+doneByFlagCheckbox?.addEventListener("change", () => {
+  preferences.doneByFlag = doneByFlagCheckbox.checked;
+  savePreferences(preferences);
+  updateReports();
+});
+
+groupTiles.forEach((tile) => {
+  tile.addEventListener("click", () => {
+    openGroupMembers(tile.dataset.group);
+  });
+});
+
+closeGroupMembersButton?.addEventListener("click", () => {
+  closeModal(groupMembersModal);
+});
+
+closeTaskDetailsButton?.addEventListener("click", () => {
+  closeModal(taskDetailsModal);
+});
+
+taskDetailsForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const formData = new FormData(taskDetailsForm);
+  const taskId = formData.get("taskId")?.toString();
+  const tasks = loadTasks();
+  const updatedTasks = tasks.map((task) =>
+    task.id === taskId
+      ? {
+          ...task,
+          title: formData.get("title")?.toString().trim() ?? task.title,
+          description: formData.get("description")?.toString() ?? "",
+          due: formData.get("due")?.toString() ?? "",
+          level: formData.get("level")?.toString() ?? "L2",
+          completed: formData.get("completed") === "on",
+        }
+      : task
+  );
+  saveTasks(updatedTasks);
+  renderBoard(updatedTasks);
+  updateReports();
+  closeModal(taskDetailsModal);
 });
 
 forgotPasswordButton.addEventListener("click", () => {
@@ -575,16 +1081,28 @@ newPasswordForm.addEventListener("submit", async (event) => {
   const formData = new FormData(newPasswordForm);
   const token = formData.get("token").toString();
   const newPassword = formData.get("password").toString();
+
+  const apiResult = await apiRequest("/api/auth/reset-password", {
+    method: "POST",
+    body: JSON.stringify({ token, password: newPassword }),
+  });
+
+  if (apiResult?.ok) {
+    closeModal(newPasswordModal);
+    setAuthMessage("Паролата е обновена. Можеш да влезеш.");
+    return;
+  }
+
   const tokens = loadResetTokens();
   const tokenRecord = tokens.find((item) => item.token === token);
   if (!tokenRecord) {
-    setAuthMessage("Линкът за възстановяване е невалиден.");
+    setAuthMessage(apiResult?.data?.message ?? "Линкът за възстановяване е невалиден.");
     return;
   }
   const users = loadUsers();
   const updatedUsers = await Promise.all(
     users.map(async (user) => {
-      if (user.email !== tokenRecord.email) {
+      if (normalizeEmail(user.email) !== normalizeEmail(tokenRecord.email)) {
         return user;
       }
       return { ...user, password: await hashPassword(newPassword) };
@@ -656,6 +1174,18 @@ newPasswordModal.addEventListener("click", (event) => {
   }
 });
 
+taskDetailsModal?.addEventListener("click", (event) => {
+  if (event.target === taskDetailsModal) {
+    closeModal(taskDetailsModal);
+  }
+});
+
+groupMembersModal?.addEventListener("click", (event) => {
+  if (event.target === groupMembersModal) {
+    closeModal(groupMembersModal);
+  }
+});
+
 formEl.addEventListener("submit", (event) => {
   event.preventDefault();
   const formData = new FormData(formEl);
@@ -667,6 +1197,8 @@ formEl.addEventListener("submit", (event) => {
     due: formData.get("due").toString(),
     column: formData.get("column").toString(),
     tag: "Ново",
+    level: formData.get("level")?.toString() ?? "L2",
+    completed: false,
   };
   const updated = [newTask, ...tasks];
   saveTasks(updated);
