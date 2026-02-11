@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 
 const DB_PATH = resolve("./db.json");
 const PORT = Number(process.env.PORT ?? 8787);
+const HOST = process.env.HOST || "0.0.0.0";
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 
 const hashPassword = (password) => createHash("sha256").update(password).digest("hex");
@@ -435,7 +436,7 @@ const server = createServer(async (req, res) => {
   send(res, 404, { message: "Not found" });
 });
 
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`Teamio server слуша на ${BASE_URL}`);
+server.listen(PORT, HOST, () => {
+  console.log(`Teamio server слуша на ${BASE_URL} (bind: ${HOST}:${PORT})`);
 });
 
