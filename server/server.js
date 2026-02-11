@@ -5,6 +5,8 @@ import { resolve } from "node:path";
 
 const DB_PATH = resolve("./db.json");
 const PORT = Number(process.env.PORT ?? 8787);
+const BASE_URL = process.env.BASE_URL || `${BASE_URL}`;
+
 
 const hashPassword = (password) => createHash("sha256").update(password).digest("hex");
 const normalizeEmail = (email = "") => email.trim().toLowerCase();
@@ -150,7 +152,7 @@ const server = createServer(async (req, res) => {
     db.users.push(newUser);
     await writeDb(db);
 
-    const verificationLink = `http://localhost:${PORT}/?verify=${verifyToken}`;
+    const verificationLink = `${BASE_URL}/?verify=${verifyToken}`;
     console.log(`[Teamio] Verification линк за ${email}: ${verificationLink}`);
 
     send(res, 201, { message: "Пратихме линк за потвърждение на имейла.", verificationLink });
@@ -232,7 +234,7 @@ const server = createServer(async (req, res) => {
       const token = randomBytes(16).toString("hex");
       db.resetTokens.push({ token, email, createdAt: Date.now() });
       await writeDb(db);
-      console.log(`[Teamio] Reset линк за ${email}: http://localhost:${PORT}/?reset=${token}`);
+      console.log(`[Teamio] Reset линк за ${email}: ${BASE_URL}/?reset=${token}`);
     }
 
     send(res, 200, { message: "Ако имейлът съществува, изпратихме линк за смяна на парола." });
@@ -435,5 +437,5 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`Teamio server слуша на http://localhost:${PORT}`);
+  console.log(`Teamio server слуша на ${BASE_URL}`);
 });
