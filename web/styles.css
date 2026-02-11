@@ -1235,9 +1235,20 @@ body {
 }
 
 .header__actions .ghost,
-.header__actions .primary,
 #board-selector {
   background: rgba(255, 255, 255, 0.9);
+}
+
+.header__actions .primary {
+  background: rgba(255, 255, 255, 0.95);
+  color: var(--primary-dark);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow: none;
+}
+
+.header__actions .primary:hover {
+  background: #ffffff;
+  color: var(--primary-dark);
 }
 
 .board-topbar {
@@ -1299,9 +1310,14 @@ body {
 .stat {
   border-radius: 14px;
   padding: 10px 12px;
+  min-height: 54px;
   background: rgba(255, 255, 255, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.58);
   box-shadow: 0 10px 20px rgba(45, 27, 95, 0.14);
+}
+
+.stat h4 {
+  white-space: nowrap;
 }
 
 .stat p {
