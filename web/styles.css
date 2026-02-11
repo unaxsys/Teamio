@@ -1322,6 +1322,7 @@ body {
 .overview {
   margin-top: 0;
   gap: 10px;
+  align-items: stretch;
 }
 
 .stat {
@@ -1331,16 +1332,21 @@ body {
   background: rgba(255, 255, 255, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.58);
   box-shadow: 0 10px 20px rgba(45, 27, 95, 0.14);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .stat h4 {
   white-space: nowrap;
+  line-height: 1.15;
 }
 
 .stat p {
   min-width: 28px;
   height: 28px;
   font-size: 14px;
+  line-height: 1;
 }
 
 .column {

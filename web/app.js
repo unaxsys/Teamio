@@ -1886,7 +1886,7 @@ navItems.forEach((item) => {
   });
 });
 
-settingsButton.addEventListener("click", () => {
+settingsButton?.addEventListener("click", () => {
   activateTab("settings");
 });
 
