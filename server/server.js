@@ -45,12 +45,14 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  if (req.url === "/api/health" && req.method === "GET") {
+  const requestUrl = new URL(req.url ?? "/", `http://${req.headers.host ?? `localhost:${PORT}`}`);
+
+  if (requestUrl.pathname === "/api/health" && req.method === "GET") {
     send(res, 200, { ok: true });
     return;
   }
 
-  if (req.url === "/api/auth/register" && req.method === "POST") {
+  if (requestUrl.pathname === "/api/auth/register" && req.method === "POST") {
     const body = await readBody(req);
     const name = normalizeText(body.name);
     const email = normalizeEmail(body.email);
@@ -156,7 +158,7 @@ const server = createServer(async (req, res) => {
   }
 
 
-  if (req.url === "/api/auth/verify-email" && req.method === "POST") {
+  if (requestUrl.pathname === "/api/auth/verify-email" && req.method === "POST") {
     const body = await readBody(req);
     const token = normalizeText(body.token);
     if (!token) {
@@ -197,7 +199,7 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  if (req.url === "/api/auth/login" && req.method === "POST") {
+  if (requestUrl.pathname === "/api/auth/login" && req.method === "POST") {
     const body = await readBody(req);
     const email = normalizeEmail(body.email);
     const password = normalizeText(body.password);
@@ -220,7 +222,7 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  if (req.url === "/api/auth/forgot-password" && req.method === "POST") {
+  if (requestUrl.pathname === "/api/auth/forgot-password" && req.method === "POST") {
     const body = await readBody(req);
     const email = normalizeEmail(body.email);
     const db = ensureDbShape(await readDb());
@@ -237,7 +239,7 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  if (req.url === "/api/auth/reset-password" && req.method === "POST") {
+  if (requestUrl.pathname === "/api/auth/reset-password" && req.method === "POST") {
     const body = await readBody(req);
     const token = normalizeText(body.token);
     const password = normalizeText(body.password);
@@ -265,6 +267,167 @@ const server = createServer(async (req, res) => {
     await writeDb(db);
 
     send(res, 200, { message: "Паролата е обновена." });
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/users/by-email" && req.method === "GET") {
+    const email = normalizeEmail(requestUrl.searchParams.get("email") ?? "");
+    if (!email) {
+      send(res, 400, { message: "Липсва имейл." });
+      return;
+    }
+
+    const db = ensureDbShape(await readDb());
+    const user = db.users.find((item) => normalizeEmail(item.email) === email);
+    if (!user) {
+      send(res, 200, { user: null });
+      return;
+    }
+
+    send(res, 200, {
+      user: {
+        id: user.id,
+        email: user.email,
+        accountId: user.accountId ?? null,
+        role: user.role ?? "Member",
+      },
+    });
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/invites" && req.method === "GET") {
+    const accountId = normalizeText(requestUrl.searchParams.get("accountId") ?? "");
+    const email = normalizeEmail(requestUrl.searchParams.get("email") ?? "");
+
+    const db = ensureDbShape(await readDb());
+    const invites = db.invites.filter((invite) => {
+      const byAccount = accountId ? invite.accountId === accountId : false;
+      const byEmail = email ? normalizeEmail(invite.email) === email : false;
+      return byAccount || byEmail;
+    });
+
+    send(res, 200, { invites });
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/invites" && req.method === "POST") {
+    const body = await readBody(req);
+    const accountId = normalizeText(body.accountId);
+    const invitedByUserId = normalizeText(body.invitedByUserId);
+    const email = normalizeEmail(body.email);
+    const role = normalizeText(body.role || "Member");
+
+    if (!accountId || !email) {
+      send(res, 400, { message: "Липсват данни за покана." });
+      return;
+    }
+
+    const db = ensureDbShape(await readDb());
+    const account = db.accounts.find((item) => item.id === accountId);
+    if (!account) {
+      send(res, 404, { message: "Фирмата не е намерена." });
+      return;
+    }
+
+    const existingUser = db.users.find((user) => normalizeEmail(user.email) === email);
+    if (existingUser?.accountId && existingUser.accountId !== accountId) {
+      send(res, 409, { message: "Този имейл вече принадлежи на друг акаунт и не може да бъде поканен." });
+      return;
+    }
+
+    const invite = {
+      id: `invite-${Date.now()}`,
+      accountId,
+      invitedByUserId: invitedByUserId || null,
+      email,
+      role,
+      token: randomBytes(16).toString("hex"),
+      expiresAt: Date.now() + 48 * 60 * 60 * 1000,
+      acceptedAt: null,
+      declinedAt: null,
+      revokedAt: null,
+      usedAt: null,
+    };
+
+    db.invites.unshift(invite);
+    await writeDb(db);
+    send(res, 201, { invite });
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/invites/respond" && req.method === "POST") {
+    const body = await readBody(req);
+    const inviteId = normalizeText(body.inviteId);
+    const action = normalizeText(body.action).toLowerCase();
+    const userId = normalizeText(body.userId);
+    const email = normalizeEmail(body.email);
+
+    if (!inviteId || !["accept", "decline"].includes(action)) {
+      send(res, 400, { message: "Невалидна заявка за покана." });
+      return;
+    }
+
+    const db = ensureDbShape(await readDb());
+    const invite = db.invites.find((item) => item.id === inviteId);
+    if (!invite) {
+      send(res, 404, { message: "Поканата не е намерена." });
+      return;
+    }
+
+    if (normalizeEmail(invite.email) !== email) {
+      send(res, 403, { message: "Поканата не е за този имейл." });
+      return;
+    }
+
+    if (invite.revokedAt || invite.expiresAt < Date.now()) {
+      send(res, 400, { message: "Поканата е невалидна." });
+      return;
+    }
+
+    const now = Date.now();
+    if (action === "accept") {
+      db.invites = db.invites.map((item) =>
+        item.id === inviteId
+          ? { ...item, acceptedAt: now, acceptedUserId: userId || item.acceptedUserId || null, declinedAt: null, usedAt: now }
+          : item
+      );
+      db.users = db.users.map((user) =>
+        userId && user.id === userId ? { ...user, accountId: invite.accountId, role: invite.role ?? user.role } : user
+      );
+      db.accounts = db.accounts.map((account) => {
+        if (account.id !== invite.accountId) {
+          return account;
+        }
+
+        const memberExists = (account.members ?? []).some((member) => normalizeEmail(member.email ?? "") === email);
+        if (memberExists) {
+          return account;
+        }
+
+        return {
+          ...account,
+          members: [
+            ...(account.members ?? []),
+            {
+              id: userId || `member-${Date.now()}`,
+              userId: userId || null,
+              name: email,
+              email,
+              role: invite.role ?? "Member",
+              teamIds: [],
+            },
+          ],
+        };
+      });
+    } else {
+      db.invites = db.invites.map((item) =>
+        item.id === inviteId ? { ...item, declinedAt: now, declinedUserId: userId || null } : item
+      );
+    }
+
+    await writeDb(db);
+    const updatedInvite = db.invites.find((item) => item.id === inviteId) ?? null;
+    send(res, 200, { invite: updatedInvite });
     return;
   }
 

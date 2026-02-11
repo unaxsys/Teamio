@@ -749,6 +749,42 @@ body {
   max-height: 120px;
 }
 
+
+.invite-share {
+  margin: 10px 0 14px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  background: rgba(123, 138, 253, 0.06);
+}
+
+.invite-share__row {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.invite-share__row a {
+  font-size: 12px;
+  color: var(--primary);
+  word-break: break-all;
+}
+
+.invite-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.panel-list__item--stack {
+  align-items: flex-start;
+}
+
+.panel-list__item--stack .invite-actions {
+  margin-left: auto;
+}
+
 .calendar-toolbar {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
