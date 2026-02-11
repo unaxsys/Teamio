@@ -23,6 +23,15 @@ npm start
 
 This creates/uses `server/db.json` as the auth database.
 
+By default the server binds to `0.0.0.0:8787` and prints the effective URL from `BASE_URL`.
+
+You can set a public base URL (for verification/reset links):
+
+```bash
+cd server
+BASE_URL="https://your-domain.com" npm start
+```
+
 By default the web app still works in local demo mode.
 To connect the UI to the API server, open browser console and set:
 

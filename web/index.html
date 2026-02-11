@@ -255,7 +255,20 @@
                 </label>
                 <button type="submit" class="primary panel-form__submit">Изпрати покана</button>
               </form>
+              <div class="invite-share" id="invite-share" hidden>
+                <strong>Линк за поканата:</strong>
+                <div class="invite-share__row">
+                  <a id="invite-share-link" href="#" target="_blank" rel="noopener noreferrer"></a>
+                  <button type="button" class="ghost" id="invite-copy-link">Копирай</button>
+                </div>
+              </div>
               <div class="panel-list" id="invite-list"></div>
+            </div>
+
+            <div class="panel-card" style="margin-top: 16px;">
+              <h3>Моите покани</h3>
+              <p class="panel-list__meta">Тук можеш да приемеш или откажеш покана, когато имейлът ти е поканен.</p>
+              <div class="panel-list" id="my-invite-list"></div>
             </div>
           </div>
         </section>
