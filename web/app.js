@@ -20,6 +20,10 @@ const modalEl = document.getElementById("modal");
 const formEl = document.getElementById("task-form");
 const columnSelect = formEl.querySelector("select[name=\"column\"]");
 const newBoardButton = document.getElementById("new-board");
+const boardSelector = document.getElementById("board-selector");
+const createBoardButton = document.getElementById("create-board");
+const renameBoardButton = document.getElementById("rename-board");
+const deleteBoardButton = document.getElementById("delete-board");
 const newColumnButton = document.getElementById("new-column");
 const navItems = document.querySelectorAll(".nav__item");
 const tabPanels = document.querySelectorAll(".tab-panel");
@@ -33,6 +37,8 @@ const teamForm = document.getElementById("team-form");
 const teamCreateForm = document.getElementById("team-create-form");
 const teamList = document.getElementById("team-list");
 const teamCatalog = document.getElementById("team-catalog");
+const inviteForm = document.getElementById("invite-form");
+const inviteList = document.getElementById("invite-list");
 const memberTeamIdsSelect = document.getElementById("member-team-ids");
 const taskTeamIdsSelect = document.getElementById("task-team-ids");
 const boardTeamFilter = document.getElementById("board-team-filter");
@@ -71,6 +77,8 @@ const showBoardFilterCheckbox = document.getElementById("setting-show-board-filt
 const boardFilterPanel = document.getElementById("board-filter-panel");
 const doneCriteriaHelp = document.getElementById("done-criteria-help");
 
+
+const defaultBoards = [{ id: "board-default", name: "Основен борд", createdAt: Date.now() }];
 
 const defaultColumns = [
   { id: "backlog", title: "Backlog", color: "#5b6bff" },
@@ -168,17 +176,85 @@ const applyBoardFilterVisibility = () => {
 };
 
 
-const loadColumns = () => {
-  const stored = localStorage.getItem("teamio-columns");
+const loadBoards = () => {
+  const stored = localStorage.getItem("teamio-boards");
   if (!stored) {
-    localStorage.setItem("teamio-columns", JSON.stringify(defaultColumns));
-    return [...defaultColumns];
+    localStorage.setItem("teamio-boards", JSON.stringify(defaultBoards));
+    localStorage.setItem("teamio-current-board", defaultBoards[0].id);
+    return [...defaultBoards];
   }
-  return JSON.parse(stored);
+  const boards = JSON.parse(stored);
+  if (!Array.isArray(boards) || boards.length === 0) {
+    localStorage.setItem("teamio-boards", JSON.stringify(defaultBoards));
+    localStorage.setItem("teamio-current-board", defaultBoards[0].id);
+    return [...defaultBoards];
+  }
+  return boards;
+};
+
+const saveBoards = (boards) => {
+  localStorage.setItem("teamio-boards", JSON.stringify(boards));
+};
+
+const getCurrentBoardId = () => {
+  const boards = loadBoards();
+  const current = localStorage.getItem("teamio-current-board") ?? boards[0]?.id;
+  if (boards.some((board) => board.id === current)) {
+    return current;
+  }
+  const fallback = boards[0]?.id ?? "board-default";
+  localStorage.setItem("teamio-current-board", fallback);
+  return fallback;
+};
+
+const setCurrentBoardId = (boardId) => {
+  localStorage.setItem("teamio-current-board", boardId);
+};
+
+const renderBoardSelector = () => {
+  if (!boardSelector) {
+    return;
+  }
+  const boards = loadBoards();
+  const currentBoardId = getCurrentBoardId();
+  boardSelector.innerHTML = "";
+  boards.forEach((board) => {
+    const option = document.createElement("option");
+    option.value = board.id;
+    option.textContent = board.name;
+    option.selected = board.id === currentBoardId;
+    boardSelector.append(option);
+  });
+};
+
+const loadAllColumns = () => JSON.parse(localStorage.getItem("teamio-columns") ?? "[]");
+
+const saveAllColumns = (columns) => {
+  localStorage.setItem("teamio-columns", JSON.stringify(columns));
+};
+
+const createDefaultColumnsForBoard = (boardId) =>
+  defaultColumns.map((column) => ({ ...column, id: `${column.id}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`, boardId }));
+
+const loadColumns = () => {
+  const currentBoardId = getCurrentBoardId();
+  const allColumns = loadAllColumns();
+  const boardColumns = allColumns.filter((column) => column.boardId === currentBoardId || !column.boardId);
+  if (boardColumns.length > 0) {
+    const normalized = boardColumns.map((column) => ({ ...column, boardId: currentBoardId }));
+    const otherColumns = allColumns.filter((column) => column.boardId && column.boardId !== currentBoardId);
+    saveAllColumns([...otherColumns, ...normalized]);
+    return normalized;
+  }
+  const defaults = createDefaultColumnsForBoard(currentBoardId);
+  saveAllColumns([...allColumns, ...defaults]);
+  return defaults;
 };
 
 const saveColumns = (columns) => {
-  localStorage.setItem("teamio-columns", JSON.stringify(columns));
+  const currentBoardId = getCurrentBoardId();
+  const allColumns = loadAllColumns().filter((column) => column.boardId !== currentBoardId);
+  saveAllColumns([...allColumns, ...columns.map((column) => ({ ...column, boardId: currentBoardId }))]);
 };
 
 const loadUsers = () => JSON.parse(localStorage.getItem("teamio-users") ?? "[]");
@@ -271,7 +347,8 @@ const syncTeamSelectors = () => {
 const getVisibleTasks = () => {
   const user = loadCurrentUser();
   const allTasks = loadTasks();
-  const accountTasks = allTasks.filter((task) => !user?.accountId || task.accountId === user.accountId);
+  const currentBoardId = getCurrentBoardId();
+  const accountTasks = allTasks.filter((task) => (!user?.accountId || task.accountId === user.accountId) && (task.boardId ?? currentBoardId) === currentBoardId);
   const selectedTeamIds = getSelectedValues(boardTeamFilter);
   if (selectedTeamIds.length === 0) {
     return accountTasks;
@@ -338,6 +415,14 @@ const applyManagementAccessUi = () => {
     boardTeamFilter.disabled = !hasAccess;
     boardTeamFilter.title = hasAccess ? "" : "Само администратор/собственик може да определя филтъра.";
   }
+
+  [createBoardButton, renameBoardButton, deleteBoardButton].forEach((button) => {
+    if (!button) {
+      return;
+    }
+    button.disabled = !hasAccess;
+    button.title = hasAccess ? "" : "Само администратор/собственик може да управлява бордове.";
+  });
 };
 
 const loadApiBase = () => localStorage.getItem("teamio-api-base") ?? "";
@@ -376,6 +461,12 @@ const saveResetTokens = (tokens) => {
 
 const loadResetTokens = () => JSON.parse(localStorage.getItem("teamio-reset-tokens") ?? "[]");
 
+const saveVerificationTokens = (tokens) => {
+  localStorage.setItem("teamio-verification-tokens", JSON.stringify(tokens));
+};
+
+const loadVerificationTokens = () => JSON.parse(localStorage.getItem("teamio-verification-tokens") ?? "[]");
+
 const setAuthMessage = (message) => {
   authMessage.textContent = message;
 };
@@ -410,6 +501,7 @@ const showApp = (user) => {
   appEl.classList.remove("app--hidden");
   updateProfile(normalizedUser);
   applyManagementAccessUi();
+  renderBoardSelector();
   syncTeamSelectors();
   renderBoard(getVisibleTasks());
   renderTeams();
@@ -457,6 +549,11 @@ const handleLogin = async (email, password) => {
     return;
   }
 
+  if (user.isEmailVerified === false) {
+    setAuthMessage("Потвърди имейла си преди вход.");
+    return;
+  }
+
   if (user.password === normalizedPassword) {
     user.password = hashed;
     saveUsers(users);
@@ -488,10 +585,9 @@ const handleRegister = async (name, email, password, companyName) => {
     }),
   });
 
-  if (apiResult?.ok && apiResult.data?.user) {
-    setCurrentUser(apiResult.data.user);
-    setAuthMessage("");
-    showApp(apiResult.data.user);
+  if (apiResult?.ok) {
+    setAuthMessage("Регистрацията е успешна. Провери имейла си и потвърди акаунта преди вход.");
+    activateAuthForm("login");
     return;
   }
 
@@ -519,6 +615,7 @@ const handleRegister = async (name, email, password, companyName) => {
     password: hashed,
     role: "Собственик",
     accountId,
+    isEmailVerified: false,
   };
 
   const updatedAccounts = loadAccounts().map((account) =>
@@ -528,9 +625,12 @@ const handleRegister = async (name, email, password, companyName) => {
 
   const updated = [...users, newUser];
   saveUsers(updated);
-  setCurrentUser(newUser);
-  setAuthMessage("");
-  showApp(newUser);
+  const verificationToken = generateToken();
+  const verificationTokens = loadVerificationTokens();
+  verificationTokens.push({ token: verificationToken, userId: newUserId, email: normalizedEmail, expiresAt: Date.now() + 24 * 60 * 60 * 1000, usedAt: null });
+  saveVerificationTokens(verificationTokens);
+  setAuthMessage("Регистрацията е успешна. Потвърди имейла си, за да влезеш.");
+  activateAuthForm("login");
 };
 
 const openModal = (modal) => {
@@ -576,16 +676,54 @@ const requestPasswordReset = async (email) => {
 
 const clearSensitiveQueryParams = () => {
   const url = new URL(window.location.href);
-  const hadEmail = url.searchParams.has("email");
-  const hadPassword = url.searchParams.has("password");
+  const sensitiveParams = ["email", "password", "verify", "reset"];
+  const hadSensitive = sensitiveParams.some((param) => url.searchParams.has(param));
 
-  if (!hadEmail && !hadPassword) {
+  if (!hadSensitive) {
     return;
   }
 
-  url.searchParams.delete("email");
-  url.searchParams.delete("password");
+  sensitiveParams.forEach((param) => url.searchParams.delete(param));
   window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+};
+
+const openVerifyFromUrl = async () => {
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get("verify");
+  if (!token) {
+    return;
+  }
+
+  const apiResult = await apiRequest("/api/auth/verify-email", {
+    method: "POST",
+    body: JSON.stringify({ token }),
+  });
+
+  if (apiResult?.ok) {
+    setAuthMessage("Имейлът е потвърден. Влез в профила си.");
+    return;
+  }
+
+  const verificationTokens = loadVerificationTokens();
+  const tokenRecord = verificationTokens.find((item) => item.token === token);
+
+  if (!tokenRecord || tokenRecord.usedAt || tokenRecord.expiresAt < Date.now()) {
+    setAuthMessage(apiResult?.data?.message ?? "Линкът за потвърждение е невалиден или изтекъл.");
+    return;
+  }
+
+  const users = loadUsers();
+  const updatedUsers = users.map((user) =>
+    user.id === tokenRecord.userId || normalizeEmail(user.email) === normalizeEmail(tokenRecord.email)
+      ? { ...user, isEmailVerified: true }
+      : user
+  );
+  saveUsers(updatedUsers);
+  const updatedTokens = verificationTokens.map((item) =>
+    item.token === token ? { ...item, usedAt: Date.now() } : item
+  );
+  saveVerificationTokens(updatedTokens);
+  setAuthMessage("Имейлът е потвърден. Влез в профила си.");
 };
 
 const openResetFromUrl = () => {
@@ -629,14 +767,19 @@ const loadDensity = () => {
   applyDensity(saved);
 };
 
+const loadAllTasks = () => JSON.parse(localStorage.getItem("teamio-tasks") ?? "[]");
+
 const loadTasks = () => {
   const stored = localStorage.getItem("teamio-tasks");
+  const currentBoardId = getCurrentBoardId();
   if (!stored) {
-    localStorage.setItem("teamio-tasks", JSON.stringify(defaultTasks));
-    return [...defaultTasks];
+    const seeded = defaultTasks.map((task) => ({ ...task, boardId: currentBoardId }));
+    localStorage.setItem("teamio-tasks", JSON.stringify(seeded));
+    return seeded;
   }
   return JSON.parse(stored).map((task) => ({
     ...task,
+    boardId: task.boardId ?? currentBoardId,
     level: task.level ?? "L2",
     completed: Boolean(task.completed),
   }));
@@ -853,6 +996,37 @@ const renderBoard = (tasks) => {
   updateReports();
 };
 
+const loadInvites = () => JSON.parse(localStorage.getItem("teamio-invites") ?? "[]");
+
+const saveInvites = (invites) => {
+  localStorage.setItem("teamio-invites", JSON.stringify(invites));
+};
+
+const renderInvites = () => {
+  if (!inviteList) {
+    return;
+  }
+  const currentBoardId = getCurrentBoardId();
+  const invites = loadInvites().filter((invite) => invite.boardId === currentBoardId);
+  inviteList.innerHTML = "";
+
+  if (invites.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "panel-list__item";
+    empty.innerHTML = '<div><strong>Няма активни покани</strong><div class="panel-list__meta">Изпрати първата покана за този борд.</div></div>';
+    inviteList.append(empty);
+    return;
+  }
+
+  invites.forEach((invite) => {
+    const status = invite.acceptedAt ? "Приета" : invite.expiresAt < Date.now() ? "Изтекла" : "Активна";
+    const item = document.createElement("div");
+    item.className = "panel-list__item";
+    item.innerHTML = `<div><strong>${invite.email}</strong><div class="panel-list__meta">Роля: ${invite.role} · ${status}</div></div>`;
+    inviteList.append(item);
+  });
+};
+
 const openGroupMembers = (groupId) => {
   const members = loadTeams().filter((member) => (member.group ?? "product") === groupId);
   groupMembersTitle.textContent = `${groupLabels[groupId] ?? "Екип"} – хора`;
@@ -1011,6 +1185,7 @@ const renderTeams = () => {
   }
 
   syncTeamSelectors();
+  renderInvites();
 };
 
 const parseDateOnly = (dateString) => {
@@ -1569,6 +1744,107 @@ densityButtons.forEach((button) => {
   });
 });
 
+boardSelector?.addEventListener("change", () => {
+  setCurrentBoardId(boardSelector.value);
+  renderBoardSelector();
+  renderBoard(getVisibleTasks());
+  renderInvites();
+});
+
+createBoardButton?.addEventListener("click", () => {
+  if (!hasManagementAccess()) {
+    return;
+  }
+  const name = window.prompt("Име на новия борд:", "Нов борд");
+  if (!name?.trim()) {
+    return;
+  }
+  const boards = loadBoards();
+  const boardId = `board-${Date.now()}`;
+  boards.push({ id: boardId, name: name.trim(), createdAt: Date.now() });
+  saveBoards(boards);
+  setCurrentBoardId(boardId);
+  const allColumns = loadAllColumns();
+  saveAllColumns([...allColumns, ...createDefaultColumnsForBoard(boardId)]);
+  renderBoardSelector();
+  renderBoard(getVisibleTasks());
+  renderInvites();
+});
+
+renameBoardButton?.addEventListener("click", () => {
+  if (!hasManagementAccess()) {
+    return;
+  }
+  const currentBoardId = getCurrentBoardId();
+  const boards = loadBoards();
+  const currentBoard = boards.find((board) => board.id === currentBoardId);
+  if (!currentBoard) {
+    return;
+  }
+  const nextName = window.prompt("Ново име на борда:", currentBoard.name);
+  if (!nextName?.trim()) {
+    return;
+  }
+  saveBoards(boards.map((board) => (board.id === currentBoardId ? { ...board, name: nextName.trim() } : board)));
+  renderBoardSelector();
+});
+
+deleteBoardButton?.addEventListener("click", () => {
+  if (!hasManagementAccess()) {
+    return;
+  }
+  const boards = loadBoards();
+  if (boards.length <= 1) {
+    setAuthMessage("Трябва да остане поне един борд.");
+    return;
+  }
+  const currentBoardId = getCurrentBoardId();
+  const currentBoard = boards.find((board) => board.id === currentBoardId);
+  if (!currentBoard) {
+    return;
+  }
+  const confirmed = window.confirm(`Изтриване на борд „${currentBoard.name}“?`);
+  if (!confirmed) {
+    return;
+  }
+  const nextBoards = boards.filter((board) => board.id !== currentBoardId);
+  saveBoards(nextBoards);
+  const nextBoardId = nextBoards[0].id;
+  setCurrentBoardId(nextBoardId);
+  saveAllColumns(loadAllColumns().filter((column) => column.boardId !== currentBoardId));
+  saveTasks(loadAllTasks().filter((task) => task.boardId !== currentBoardId));
+  saveInvites(loadInvites().filter((invite) => invite.boardId !== currentBoardId));
+  renderBoardSelector();
+  renderBoard(getVisibleTasks());
+  renderInvites();
+});
+
+inviteForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!hasManagementAccess()) {
+    return;
+  }
+  const formData = new FormData(inviteForm);
+  const email = normalizeEmail(formData.get("email")?.toString() ?? "");
+  const role = normalizeText(formData.get("role")?.toString() ?? "Member");
+  if (!email) {
+    return;
+  }
+  const invites = loadInvites();
+  invites.unshift({
+    id: `invite-${Date.now()}`,
+    boardId: getCurrentBoardId(),
+    email,
+    role,
+    tokenHash: "demo-hash",
+    expiresAt: Date.now() + 48 * 60 * 60 * 1000,
+    acceptedAt: null,
+  });
+  saveInvites(invites);
+  inviteForm.reset();
+  renderInvites();
+});
+
 newBoardButton.addEventListener("click", openTaskModal);
 closeModalButton.addEventListener("click", closeTaskModal);
 modalEl.addEventListener("click", (event) => {
@@ -1620,6 +1896,7 @@ formEl.addEventListener("submit", (event) => {
     level: formData.get("level")?.toString() ?? "L2",
     teamIds: selectedTeamIds,
     accountId: currentUser?.accountId,
+    boardId: getCurrentBoardId(),
   };
   const updated = [newTask, ...tasks];
   saveTasks(updated);
@@ -1636,6 +1913,7 @@ boardTeamFilter?.addEventListener("change", () => {
 });
 
 const initialTasks = getVisibleTasks();
+renderBoardSelector();
 loadTheme();
 loadDensity();
 renderBoard(initialTasks);
@@ -1650,5 +1928,7 @@ if (activeUser) {
   showAuth();
 }
 
-clearSensitiveQueryParams();
-openResetFromUrl();
+openVerifyFromUrl().finally(() => {
+  openResetFromUrl();
+  clearSensitiveQueryParams();
+});

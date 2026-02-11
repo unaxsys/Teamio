@@ -163,6 +163,10 @@
             <p>Организирай задачите си с един поглед.</p>
           </div>
           <div class="header__actions">
+            <select id="board-selector" aria-label="Избор на борд"></select>
+            <button class="ghost" id="create-board">Нов борд</button>
+            <button class="ghost" id="rename-board">Преименувай</button>
+            <button class="ghost" id="delete-board">Изтрий</button>
             <button class="ghost" id="new-column">Нова колона</button>
             <button class="ghost" id="open-settings">Настройки</button>
             <button class="primary" id="new-board">Нова задача</button>
@@ -203,6 +207,25 @@
                 <h3 class="teams-subtitle">Екипи</h3>
                 <div class="panel-list" id="team-catalog"></div>
               </div>
+            </div>
+            <div class="panel-card" style="margin-top: 16px;">
+              <h3>Покани по имейл</h3>
+              <form class="panel-form" id="invite-form">
+                <label>
+                  Имейл
+                  <input type="email" name="email" placeholder="name@company.com" required />
+                </label>
+                <label>
+                  Роля
+                  <select name="role" required>
+                    <option value="Viewer">Viewer</option>
+                    <option value="Member" selected>Member</option>
+                    <option value="Admin">Admin</option>
+                  </select>
+                </label>
+                <button type="submit" class="primary panel-form__submit">Изпрати покана</button>
+              </form>
+              <div class="panel-list" id="invite-list"></div>
             </div>
           </div>
         </section>
