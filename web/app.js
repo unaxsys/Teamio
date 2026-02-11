@@ -813,20 +813,72 @@ const loadDensity = () => {
 
 const loadAllTasks = () => JSON.parse(localStorage.getItem("teamio-tasks") ?? "[]");
 
+const getNormalizedColumnId = (columnId, boardColumns) => {
+  if (!columnId || boardColumns.length === 0) {
+    return columnId;
+  }
+
+  if (boardColumns.some((column) => column.id === columnId)) {
+    return columnId;
+  }
+
+  const byPrefix = boardColumns.find((column) => column.id.startsWith(`${columnId}-`));
+  if (byPrefix) {
+    return byPrefix.id;
+  }
+
+  const legacyTitleMap = {
+    backlog: "Backlog",
+    progress: "В процес",
+    review: "Преглед",
+    done: "Готово",
+  };
+
+  const byTitle = boardColumns.find(
+    (column) => column.title.toLowerCase() === (legacyTitleMap[columnId] ?? columnId).toLowerCase()
+  );
+
+  return byTitle?.id ?? boardColumns[0]?.id ?? columnId;
+};
+
 const loadTasks = () => {
   const stored = localStorage.getItem("teamio-tasks");
   const currentBoardId = getCurrentBoardId();
+  const allColumns = loadAllColumns();
+
   if (!stored) {
-    const seeded = defaultTasks.map((task) => ({ ...task, boardId: currentBoardId }));
+    const boardColumns = loadColumns();
+    const seeded = defaultTasks.map((task) => ({
+      ...task,
+      boardId: currentBoardId,
+      column: getNormalizedColumnId(task.column, boardColumns),
+    }));
     localStorage.setItem("teamio-tasks", JSON.stringify(seeded));
     return seeded;
   }
-  return JSON.parse(stored).map((task) => ({
-    ...task,
-    boardId: task.boardId ?? currentBoardId,
-    level: task.level ?? "L2",
-    completed: Boolean(task.completed),
-  }));
+
+  let hasChanges = false;
+  const parsed = JSON.parse(stored).map((task) => {
+    const taskBoardId = task.boardId ?? currentBoardId;
+    const boardColumns = allColumns.filter((column) => (column.boardId ?? currentBoardId) === taskBoardId);
+    const normalizedColumn = getNormalizedColumnId(task.column, boardColumns);
+    if (normalizedColumn !== task.column || !task.boardId || !task.level) {
+      hasChanges = true;
+    }
+    return {
+      ...task,
+      column: normalizedColumn,
+      boardId: taskBoardId,
+      level: task.level ?? "L2",
+      completed: Boolean(task.completed),
+    };
+  });
+
+  if (hasChanges) {
+    localStorage.setItem("teamio-tasks", JSON.stringify(parsed));
+  }
+
+  return parsed;
 };
 
 const saveTasks = (tasks) => {
