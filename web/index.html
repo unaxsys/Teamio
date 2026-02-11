@@ -88,6 +88,7 @@
           <p class="auth-note">Вече имаш акаунт? Използвай вход.</p>
         </form>
         <div class="auth-message" id="auth-message" role="status" aria-live="polite"></div>
+        <div class="verification-help" id="verification-help"></div>
       </div>
     </div>
 
@@ -169,12 +170,27 @@
             <button class="ghost" id="rename-board">Преименувай</button>
             <button class="ghost" id="delete-board">Изтрий</button>
             <button class="ghost" id="new-column">Нова колона</button>
-            <button class="ghost" id="open-settings">Настройки</button>
             <button class="primary" id="new-board">Нова задача</button>
           </div>
         </header>
 
         <section class="overview tab-panel tab-panel--active" data-tab-panel="boards">
+          <div class="board-topbar">
+            <div class="board-topbar__title-wrap">
+              <h2 id="current-board-name">Моето табло</h2>
+              <span class="board-topbar__visibility">Workspace</span>
+            </div>
+            <div class="board-topbar__actions">
+              <input
+                type="search"
+                id="board-search"
+                placeholder="Търси задачи..."
+                aria-label="Търси в таблото"
+              />
+              <button type="button" class="ghost board-icon-button" id="board-filter-button">Филтър</button>
+              <button type="button" class="ghost board-icon-button" id="board-menu-button">⋯ Меню</button>
+            </div>
+          </div>
           <div class="stat">
             <h4>Активни задачи</h4>
             <p id="stat-active">0</p>
@@ -188,6 +204,20 @@
             <p id="stat-due">0</p>
           </div>
         </section>
+
+        <aside class="board-side-menu" id="board-side-menu" aria-hidden="true">
+          <div class="board-side-menu__header">
+            <h3>Меню</h3>
+            <button type="button" class="ghost" id="close-board-menu">Затвори</button>
+          </div>
+          <div class="board-side-menu__content">
+            <button type="button" class="board-side-menu__item" id="menu-open-settings">Настройки</button>
+            <button type="button" class="board-side-menu__item" id="menu-add-column">Добави колона</button>
+            <button type="button" class="board-side-menu__item" id="menu-new-task">Добави задача</button>
+            <button type="button" class="board-side-menu__item" id="menu-rename-board">Преименувай борд</button>
+          </div>
+        </aside>
+        <div class="board-menu-overlay" id="board-menu-overlay" aria-hidden="true"></div>
 
         <section class="board tab-panel tab-panel--active" id="board" data-tab-panel="boards"></section>
 
