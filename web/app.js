@@ -4,6 +4,7 @@ const authScreenEl = document.getElementById("auth-screen");
 const loginForm = document.getElementById("login-form");
 const registerForm = document.getElementById("register-form");
 const authMessage = document.getElementById("auth-message");
+const verificationHelp = document.getElementById("verification-help");
 const authToggleButtons = document.querySelectorAll(".auth-toggle__button");
 const profileName = document.getElementById("profile-name");
 const profileAvatar = document.getElementById("profile-avatar");
@@ -76,6 +77,21 @@ const doneByFlagCheckbox = document.getElementById("setting-done-by-flag");
 const showBoardFilterCheckbox = document.getElementById("setting-show-board-filter");
 const boardFilterPanel = document.getElementById("board-filter-panel");
 const doneCriteriaHelp = document.getElementById("done-criteria-help");
+
+const currentBoardName = document.getElementById("current-board-name");
+const boardSearchInput = document.getElementById("board-search");
+const boardFilterButton = document.getElementById("board-filter-button");
+const boardMenuButton = document.getElementById("board-menu-button");
+const boardSideMenu = document.getElementById("board-side-menu");
+const boardMenuOverlay = document.getElementById("board-menu-overlay");
+const closeBoardMenuButton = document.getElementById("close-board-menu");
+const menuOpenSettingsButton = document.getElementById("menu-open-settings");
+const menuAddColumnButton = document.getElementById("menu-add-column");
+const menuNewTaskButton = document.getElementById("menu-new-task");
+const menuRenameBoardButton = document.getElementById("menu-rename-board");
+const menuDeleteBoardButton = document.getElementById("menu-delete-board");
+
+let boardSearchQuery = "";
 
 
 const defaultBoards = [{ id: "board-default", name: "Основен борд", createdAt: Date.now() }];
@@ -224,6 +240,36 @@ const renderBoardSelector = () => {
     option.textContent = board.name;
     option.selected = board.id === currentBoardId;
     boardSelector.append(option);
+  });
+};
+
+const updateBoardTopbar = () => {
+  if (!currentBoardName) {
+    return;
+  }
+  const currentBoard = loadBoards().find((board) => board.id === getCurrentBoardId());
+  currentBoardName.textContent = currentBoard?.name ?? "Работно табло";
+};
+
+const toggleBoardMenu = (isOpen) => {
+  if (!boardSideMenu) {
+    return;
+  }
+  boardSideMenu.setAttribute("aria-hidden", (!isOpen).toString());
+  boardMenuOverlay?.classList.toggle("board-menu-overlay--open", isOpen);
+  boardMenuOverlay?.setAttribute("aria-hidden", (!isOpen).toString());
+};
+
+const getFilteredTasksBySearch = (tasks) => {
+  if (!boardSearchQuery.trim()) {
+    return tasks;
+  }
+  const query = boardSearchQuery.trim().toLowerCase();
+  return tasks.filter((task) => {
+    const title = (task.title ?? "").toLowerCase();
+    const description = (task.description ?? "").toLowerCase();
+    const tag = (task.tag ?? "").toLowerCase();
+    return title.includes(query) || description.includes(query) || tag.includes(query);
   });
 };
 
@@ -467,8 +513,59 @@ const saveVerificationTokens = (tokens) => {
 
 const loadVerificationTokens = () => JSON.parse(localStorage.getItem("teamio-verification-tokens") ?? "[]");
 
+const getOrCreateVerificationToken = (user) => {
+  if (!user?.id && !user?.email) {
+    return null;
+  }
+
+  const now = Date.now();
+  const verificationTokens = loadVerificationTokens();
+  const activeToken = verificationTokens
+    .filter(
+      (item) =>
+        !item.usedAt &&
+        item.expiresAt > now &&
+        (item.userId === user.id || normalizeEmail(item.email) === normalizeEmail(user.email))
+    )
+    .sort((a, b) => b.expiresAt - a.expiresAt)[0];
+
+  if (activeToken) {
+    return activeToken.token;
+  }
+
+  const token = generateToken();
+  verificationTokens.push({
+    token,
+    userId: user.id,
+    email: normalizeEmail(user.email),
+    expiresAt: now + 24 * 60 * 60 * 1000,
+    usedAt: null,
+  });
+  saveVerificationTokens(verificationTokens);
+  return token;
+};
+
 const setAuthMessage = (message) => {
   authMessage.textContent = message;
+};
+
+const buildVerificationLink = (token) => {
+  const url = new URL(window.location.href);
+  url.searchParams.set("verify", token);
+  return url.toString();
+};
+
+const setVerificationHelp = (token, email) => {
+  if (!verificationHelp) {
+    return;
+  }
+  if (!token) {
+    verificationHelp.innerHTML = "";
+    return;
+  }
+  const verifyLink = buildVerificationLink(token);
+  const safeEmail = email ? `<strong>${email}</strong>` : "посочения имейл";
+  verificationHelp.innerHTML = `Не получи имейл за потвърждение за ${safeEmail}? Използвай този линк: <a href="${verifyLink}">Потвърди имейла</a>`;
 };
 
 const setCurrentUser = (user) => {
@@ -550,7 +647,9 @@ const handleLogin = async (email, password) => {
   }
 
   if (user.isEmailVerified === false) {
+    const activeToken = getOrCreateVerificationToken(user);
     setAuthMessage("Потвърди имейла си преди вход.");
+    setVerificationHelp(activeToken, user.email);
     return;
   }
 
@@ -587,6 +686,7 @@ const handleRegister = async (name, email, password, companyName) => {
 
   if (apiResult?.ok) {
     setAuthMessage("Регистрацията е успешна. Провери имейла си и потвърди акаунта преди вход.");
+    setVerificationHelp();
     activateAuthForm("login");
     return;
   }
@@ -631,6 +731,7 @@ const handleRegister = async (name, email, password, companyName) => {
   saveVerificationTokens(verificationTokens);
   setAuthMessage("Регистрацията е успешна. Потвърди имейла си, за да влезеш.");
   activateAuthForm("login");
+  setVerificationHelp(verificationToken, normalizedEmail);
 };
 
 const openModal = (modal) => {
@@ -701,6 +802,7 @@ const openVerifyFromUrl = async () => {
 
   if (apiResult?.ok) {
     setAuthMessage("Имейлът е потвърден. Влез в профила си.");
+    setVerificationHelp();
     return;
   }
 
@@ -724,6 +826,7 @@ const openVerifyFromUrl = async () => {
   );
   saveVerificationTokens(updatedTokens);
   setAuthMessage("Имейлът е потвърден. Влез в профила си.");
+  setVerificationHelp();
 };
 
 const openResetFromUrl = () => {
@@ -769,20 +872,72 @@ const loadDensity = () => {
 
 const loadAllTasks = () => JSON.parse(localStorage.getItem("teamio-tasks") ?? "[]");
 
+const getNormalizedColumnId = (columnId, boardColumns) => {
+  if (!columnId || boardColumns.length === 0) {
+    return columnId;
+  }
+
+  if (boardColumns.some((column) => column.id === columnId)) {
+    return columnId;
+  }
+
+  const byPrefix = boardColumns.find((column) => column.id.startsWith(`${columnId}-`));
+  if (byPrefix) {
+    return byPrefix.id;
+  }
+
+  const legacyTitleMap = {
+    backlog: "Backlog",
+    progress: "В процес",
+    review: "Преглед",
+    done: "Готово",
+  };
+
+  const byTitle = boardColumns.find(
+    (column) => column.title.toLowerCase() === (legacyTitleMap[columnId] ?? columnId).toLowerCase()
+  );
+
+  return byTitle?.id ?? boardColumns[0]?.id ?? columnId;
+};
+
 const loadTasks = () => {
   const stored = localStorage.getItem("teamio-tasks");
   const currentBoardId = getCurrentBoardId();
+  const allColumns = loadAllColumns();
+
   if (!stored) {
-    const seeded = defaultTasks.map((task) => ({ ...task, boardId: currentBoardId }));
+    const boardColumns = loadColumns();
+    const seeded = defaultTasks.map((task) => ({
+      ...task,
+      boardId: currentBoardId,
+      column: getNormalizedColumnId(task.column, boardColumns),
+    }));
     localStorage.setItem("teamio-tasks", JSON.stringify(seeded));
     return seeded;
   }
-  return JSON.parse(stored).map((task) => ({
-    ...task,
-    boardId: task.boardId ?? currentBoardId,
-    level: task.level ?? "L2",
-    completed: Boolean(task.completed),
-  }));
+
+  let hasChanges = false;
+  const parsed = JSON.parse(stored).map((task) => {
+    const taskBoardId = task.boardId ?? currentBoardId;
+    const boardColumns = allColumns.filter((column) => (column.boardId ?? currentBoardId) === taskBoardId);
+    const normalizedColumn = getNormalizedColumnId(task.column, boardColumns);
+    if (normalizedColumn !== task.column || !task.boardId || !task.level) {
+      hasChanges = true;
+    }
+    return {
+      ...task,
+      column: normalizedColumn,
+      boardId: taskBoardId,
+      level: task.level ?? "L2",
+      completed: Boolean(task.completed),
+    };
+  });
+
+  if (hasChanges) {
+    localStorage.setItem("teamio-tasks", JSON.stringify(parsed));
+  }
+
+  return parsed;
 };
 
 const saveTasks = (tasks) => {
@@ -866,9 +1021,11 @@ const createCard = (task, columnColor) => {
 
 const renderBoard = (tasks) => {
   boardEl.innerHTML = "";
+  updateBoardTopbar();
+  const filteredTasks = getFilteredTasksBySearch(tasks);
   const columns = loadColumns();
-  const activeCount = tasks.filter((task) => task.column !== "done").length;
-  const dueCount = tasks.filter((task) => task.due).length;
+  const activeCount = filteredTasks.filter((task) => task.column !== "done").length;
+  const dueCount = filteredTasks.filter((task) => task.due).length;
   statActive.textContent = activeCount.toString();
   statDue.textContent = dueCount.toString();
 
@@ -894,7 +1051,7 @@ const renderBoard = (tasks) => {
 
     const count = document.createElement("span");
     count.className = "column__count";
-    const columnTasks = tasks
+    const columnTasks = filteredTasks
       .filter((task) => task.column === column.id)
       .sort((a, b) => (levelOrder[a.level ?? "L2"] ?? 2) - (levelOrder[b.level ?? "L2"] ?? 2));
     count.textContent = `${columnTasks.length} задачи`;
@@ -926,7 +1083,7 @@ const renderBoard = (tasks) => {
         item.id === column.id ? { ...item, title: newName.trim() } : item
       );
       saveColumns(updatedColumns);
-      renderBoard(tasks);
+      renderBoard(getVisibleTasks());
     });
 
     actions.append(count, dragButton, renameButton);
@@ -1363,6 +1520,7 @@ const activateAuthForm = (target) => {
   loginForm.classList.toggle("auth-form--active", target === "login");
   registerForm.classList.toggle("auth-form--active", target === "register");
   setAuthMessage("");
+  setVerificationHelp();
 };
 
 authToggleButtons.forEach((button) => {
@@ -1725,10 +1883,11 @@ const activateTab = (tabId) => {
 navItems.forEach((item) => {
   item.addEventListener("click", () => {
     activateTab(item.dataset.tab);
+    toggleBoardMenu(false);
   });
 });
 
-settingsButton.addEventListener("click", () => {
+settingsButton?.addEventListener("click", () => {
   activateTab("settings");
 });
 
@@ -1751,6 +1910,59 @@ boardSelector?.addEventListener("change", () => {
   renderInvites();
 });
 
+boardSearchInput?.addEventListener("input", () => {
+  boardSearchQuery = boardSearchInput.value;
+  renderBoard(getVisibleTasks());
+});
+
+boardFilterButton?.addEventListener("click", () => {
+  activateTab("settings");
+  document.getElementById("board-team-filter")?.focus();
+});
+
+boardMenuButton?.addEventListener("click", () => {
+  toggleBoardMenu(true);
+});
+
+closeBoardMenuButton?.addEventListener("click", () => {
+  toggleBoardMenu(false);
+});
+
+boardMenuOverlay?.addEventListener("click", () => {
+  toggleBoardMenu(false);
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    toggleBoardMenu(false);
+  }
+});
+
+menuOpenSettingsButton?.addEventListener("click", () => {
+  activateTab("settings");
+  toggleBoardMenu(false);
+});
+
+menuAddColumnButton?.addEventListener("click", () => {
+  newColumnButton?.click();
+  toggleBoardMenu(false);
+});
+
+menuNewTaskButton?.addEventListener("click", () => {
+  openTaskModal();
+  toggleBoardMenu(false);
+});
+
+menuRenameBoardButton?.addEventListener("click", () => {
+  renameCurrentBoard();
+  toggleBoardMenu(false);
+});
+
+menuDeleteBoardButton?.addEventListener("click", () => {
+  deleteCurrentBoard();
+  toggleBoardMenu(false);
+});
+
 createBoardButton?.addEventListener("click", () => {
   if (!hasManagementAccess()) {
     return;
@@ -1771,7 +1983,7 @@ createBoardButton?.addEventListener("click", () => {
   renderInvites();
 });
 
-renameBoardButton?.addEventListener("click", () => {
+const renameCurrentBoard = () => {
   if (!hasManagementAccess()) {
     return;
   }
@@ -1787,9 +1999,9 @@ renameBoardButton?.addEventListener("click", () => {
   }
   saveBoards(boards.map((board) => (board.id === currentBoardId ? { ...board, name: nextName.trim() } : board)));
   renderBoardSelector();
-});
+};
 
-deleteBoardButton?.addEventListener("click", () => {
+const deleteCurrentBoard = () => {
   if (!hasManagementAccess()) {
     return;
   }
@@ -1817,7 +2029,11 @@ deleteBoardButton?.addEventListener("click", () => {
   renderBoardSelector();
   renderBoard(getVisibleTasks());
   renderInvites();
-});
+};
+
+renameBoardButton?.addEventListener("click", renameCurrentBoard);
+
+deleteBoardButton?.addEventListener("click", deleteCurrentBoard);
 
 inviteForm?.addEventListener("submit", (event) => {
   event.preventDefault();
