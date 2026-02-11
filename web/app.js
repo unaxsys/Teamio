@@ -512,6 +512,38 @@ const saveVerificationTokens = (tokens) => {
 
 const loadVerificationTokens = () => JSON.parse(localStorage.getItem("teamio-verification-tokens") ?? "[]");
 
+const getOrCreateVerificationToken = (user) => {
+  if (!user?.id && !user?.email) {
+    return null;
+  }
+
+  const now = Date.now();
+  const verificationTokens = loadVerificationTokens();
+  const activeToken = verificationTokens
+    .filter(
+      (item) =>
+        !item.usedAt &&
+        item.expiresAt > now &&
+        (item.userId === user.id || normalizeEmail(item.email) === normalizeEmail(user.email))
+    )
+    .sort((a, b) => b.expiresAt - a.expiresAt)[0];
+
+  if (activeToken) {
+    return activeToken.token;
+  }
+
+  const token = generateToken();
+  verificationTokens.push({
+    token,
+    userId: user.id,
+    email: normalizeEmail(user.email),
+    expiresAt: now + 24 * 60 * 60 * 1000,
+    usedAt: null,
+  });
+  saveVerificationTokens(verificationTokens);
+  return token;
+};
+
 const setAuthMessage = (message) => {
   authMessage.textContent = message;
 };
@@ -614,11 +646,9 @@ const handleLogin = async (email, password) => {
   }
 
   if (user.isEmailVerified === false) {
-    const activeToken = loadVerificationTokens()
-      .filter((item) => item.userId === user.id && !item.usedAt && item.expiresAt > Date.now())
-      .sort((a, b) => b.expiresAt - a.expiresAt)[0];
+    const activeToken = getOrCreateVerificationToken(user);
     setAuthMessage("Потвърди имейла си преди вход.");
-    setVerificationHelp(activeToken?.token, user.email);
+    setVerificationHelp(activeToken, user.email);
     return;
   }
 
