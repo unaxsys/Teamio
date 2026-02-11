@@ -550,8 +550,13 @@ const apiHasUserInAnotherAccount = async (email, accountId) => {
 };
 
 const hashPassword = async (password) => {
+  const subtleCrypto = globalThis.crypto?.subtle;
+  if (!subtleCrypto) {
+    return password;
+  }
+
   const data = new TextEncoder().encode(password);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashBuffer = await subtleCrypto.digest("SHA-256", data);
   return Array.from(new Uint8Array(hashBuffer))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
