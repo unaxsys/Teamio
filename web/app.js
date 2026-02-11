@@ -82,6 +82,7 @@ const boardSearchInput = document.getElementById("board-search");
 const boardFilterButton = document.getElementById("board-filter-button");
 const boardMenuButton = document.getElementById("board-menu-button");
 const boardSideMenu = document.getElementById("board-side-menu");
+const boardMenuOverlay = document.getElementById("board-menu-overlay");
 const closeBoardMenuButton = document.getElementById("close-board-menu");
 const menuOpenSettingsButton = document.getElementById("menu-open-settings");
 const menuAddColumnButton = document.getElementById("menu-add-column");
@@ -252,8 +253,9 @@ const toggleBoardMenu = (isOpen) => {
   if (!boardSideMenu) {
     return;
   }
-  boardSideMenu.classList.toggle("board-side-menu--open", isOpen);
   boardSideMenu.setAttribute("aria-hidden", (!isOpen).toString());
+  boardMenuOverlay?.classList.toggle("board-menu-overlay--open", isOpen);
+  boardMenuOverlay?.setAttribute("aria-hidden", (!isOpen).toString());
 };
 
 const getFilteredTasksBySearch = (tasks) => {
@@ -1769,6 +1771,7 @@ const activateTab = (tabId) => {
 navItems.forEach((item) => {
   item.addEventListener("click", () => {
     activateTab(item.dataset.tab);
+    toggleBoardMenu(false);
   });
 });
 
@@ -1802,7 +1805,7 @@ boardSearchInput?.addEventListener("input", () => {
 
 boardFilterButton?.addEventListener("click", () => {
   activateTab("settings");
-  showBoardFilterCheckbox?.focus();
+  document.getElementById("board-team-filter")?.focus();
 });
 
 boardMenuButton?.addEventListener("click", () => {
@@ -1813,24 +1816,14 @@ closeBoardMenuButton?.addEventListener("click", () => {
   toggleBoardMenu(false);
 });
 
+boardMenuOverlay?.addEventListener("click", () => {
+  toggleBoardMenu(false);
+});
+
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     toggleBoardMenu(false);
   }
-});
-
-document.addEventListener("click", (event) => {
-  if (!boardSideMenu?.classList.contains("board-side-menu--open")) {
-    return;
-  }
-  const target = event.target;
-  if (!(target instanceof Element)) {
-    return;
-  }
-  if (boardSideMenu.contains(target) || boardMenuButton?.contains(target)) {
-    return;
-  }
-  toggleBoardMenu(false);
 });
 
 menuOpenSettingsButton?.addEventListener("click", () => {
