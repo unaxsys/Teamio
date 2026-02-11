@@ -429,6 +429,11 @@ const normalizeEmail = (email) => email.trim().toLowerCase();
 
 const normalizeText = (value) => value.trim();
 
+const getInviteTokenFromUrl = () => {
+  const params = new URLSearchParams(window.location.search);
+  return normalizeText(params.get("invite") ?? "");
+};
+
 const hasManagementAccess = () => {
   const currentUser = loadCurrentUser();
   const account = getCurrentAccount();
@@ -668,21 +673,29 @@ const handleRegister = async (name, email, password, companyName) => {
   const normalizedEmail = normalizeEmail(email);
   const normalizedPassword = normalizeText(password);
   const normalizedCompanyName = normalizeText(companyName);
+  const inviteToken = getInviteTokenFromUrl();
 
-  if (!normalizedName || !normalizedEmail || !normalizedCompanyName || normalizedPassword.length < 6) {
+  const matchingInvite = loadInvites()
+    .filter((invite) => !invite.acceptedAt && !invite.revokedAt && invite.expiresAt > Date.now() && invite.token === inviteToken)
+    .find((invite) => normalizeEmail(invite.email) === normalizedEmail);
+
+  if (!normalizedName || !normalizedEmail || normalizedPassword.length < 6 || (!matchingInvite && !normalizedCompanyName)) {
     setAuthMessage("Попълни коректно всички полета.");
     return;
   }
 
-  const apiResult = await apiRequest("/api/auth/register", {
-    method: "POST",
-    body: JSON.stringify({
-      name: normalizedName,
-      email: normalizedEmail,
-      password: normalizedPassword,
-      companyName: normalizedCompanyName,
-    }),
-  });
+  const apiResult = matchingInvite
+    ? null
+    : await apiRequest("/api/auth/register", {
+        method: "POST",
+        body: JSON.stringify({
+          name: normalizedName,
+          email: normalizedEmail,
+          password: normalizedPassword,
+          companyName: normalizedCompanyName,
+          inviteToken,
+        }),
+      });
 
   if (apiResult?.ok) {
     setAuthMessage("Регистрацията е успешна. Провери имейла си и потвърди акаунта преди вход.");
@@ -698,13 +711,15 @@ const handleRegister = async (name, email, password, companyName) => {
     return;
   }
 
-  const accountId = `account-${Date.now()}`;
-  const defaultTeams = [
-    { id: `team-${Date.now()}-1`, name: "Продуктов екип" },
-    { id: `team-${Date.now()}-2`, name: "Инженерен екип" },
-  ];
-  accounts.push({ id: accountId, name: normalizedCompanyName, ownerUserId: `user-${Date.now()}`, teams: defaultTeams, members: [] });
-  saveAccounts(accounts);
+  const accountId = matchingInvite?.accountId ?? `account-${Date.now()}`;
+  if (!matchingInvite) {
+    const defaultTeams = [
+      { id: `team-${Date.now()}-1`, name: "Продуктов екип" },
+      { id: `team-${Date.now()}-2`, name: "Инженерен екип" },
+    ];
+    accounts.push({ id: accountId, name: normalizedCompanyName, ownerUserId: `user-${Date.now()}`, teams: defaultTeams, members: [] });
+    saveAccounts(accounts);
+  }
 
   const newUserId = `user-${Date.now()}`;
   const hashed = await hashPassword(normalizedPassword);
@@ -713,15 +728,47 @@ const handleRegister = async (name, email, password, companyName) => {
     name: normalizedName,
     email: normalizedEmail,
     password: hashed,
-    role: "Собственик",
+    role: matchingInvite?.role ?? "Собственик",
     accountId,
     isEmailVerified: false,
+    teamIds: [],
   };
 
-  const updatedAccounts = loadAccounts().map((account) =>
-    account.id === accountId ? { ...account, ownerUserId: newUserId } : account
-  );
+  const updatedAccounts = loadAccounts().map((account) => {
+    if (account.id !== accountId) {
+      return account;
+    }
+
+    const nextAccount = {
+      ...account,
+      members: [
+        ...(account.members ?? []).filter((member) => normalizeEmail(member.email ?? "") !== normalizedEmail),
+        {
+          id: newUserId,
+          userId: newUserId,
+          name: normalizedName,
+          email: normalizedEmail,
+          role: matchingInvite?.role ?? "Member",
+          teamIds: [],
+        },
+      ],
+    };
+
+    if (!matchingInvite) {
+      nextAccount.ownerUserId = newUserId;
+    }
+
+    return nextAccount;
+  });
   saveAccounts(updatedAccounts);
+
+  if (matchingInvite) {
+    saveInvites(
+      loadInvites().map((invite) =>
+        invite.id === matchingInvite.id ? { ...invite, acceptedAt: Date.now(), acceptedUserId: newUserId } : invite
+      )
+    );
+  }
 
   const updated = [...users, newUser];
   saveUsers(updated);
@@ -733,6 +780,7 @@ const handleRegister = async (name, email, password, companyName) => {
   activateAuthForm("login");
   setVerificationHelp(verificationToken, normalizedEmail);
 };
+
 
 const openModal = (modal) => {
   modal.classList.add("modal--open");
@@ -777,7 +825,7 @@ const requestPasswordReset = async (email) => {
 
 const clearSensitiveQueryParams = () => {
   const url = new URL(window.location.href);
-  const sensitiveParams = ["email", "password", "verify", "reset"];
+  const sensitiveParams = ["email", "password", "verify", "reset", "invite"];
   const hadSensitive = sensitiveParams.some((param) => url.searchParams.has(param));
 
   if (!hadSensitive) {
@@ -1163,8 +1211,8 @@ const renderInvites = () => {
   if (!inviteList) {
     return;
   }
-  const currentBoardId = getCurrentBoardId();
-  const invites = loadInvites().filter((invite) => invite.boardId === currentBoardId);
+  const currentAccount = getCurrentAccount();
+  const invites = loadInvites().filter((invite) => invite.accountId && invite.accountId === currentAccount?.id);
   inviteList.innerHTML = "";
 
   if (invites.length === 0) {
@@ -1209,7 +1257,23 @@ const openGroupMembers = (groupId) => {
 const renderTeams = () => {
   const canManage = hasManagementAccess();
   const account = getCurrentAccount();
-  const members = account?.members ?? [];
+  const registeredUsers = loadUsers()
+    .filter((user) => user.accountId === account?.id)
+    .map((user) => ({
+      id: user.id,
+      name: user.name,
+      role: user.role ?? "Member",
+      teamIds: user.teamIds ?? [],
+      userId: user.id,
+      isOwner: account?.ownerUserId === user.id,
+    }));
+  const manualMembers = (account?.members ?? []).map((member) => ({ ...member, userId: member.userId ?? null, isOwner: false }));
+  const members = [...registeredUsers];
+  manualMembers.forEach((member) => {
+    if (!members.some((entry) => (entry.userId ?? entry.id) === (member.userId ?? member.id))) {
+      members.push(member);
+    }
+  });
   const teams = account?.teams ?? [];
 
   teamList.innerHTML = "";
@@ -1248,19 +1312,50 @@ const renderTeams = () => {
     remove.type = "button";
     remove.className = "panel-list__remove";
     remove.textContent = "Премахни";
-    remove.disabled = !canManage;
-    remove.title = canManage ? "" : "Само администратор/собственик може да премахва хора.";
+    remove.disabled = !canManage || member.isOwner;
+    remove.title = member.isOwner
+      ? "Собственикът не може да бъде премахнат."
+      : canManage
+      ? ""
+      : "Само администратор/собственик може да премахва хора.";
     remove.addEventListener("click", () => {
-      if (!canManage) {
+      if (!canManage || member.isOwner) {
         return;
       }
+
+      const memberUserId = member.userId ?? member.id;
+      const updatedUsers = loadUsers().map((user) =>
+        user.id === memberUserId && user.accountId === account.id
+          ? { ...user, accountId: null, teamIds: [] }
+          : user
+      );
+      saveUsers(updatedUsers);
+
       const accounts = loadAccounts().map((entry) =>
         entry.id === account.id
-          ? { ...entry, members: (entry.members ?? []).filter((current) => current.id !== member.id) }
+          ? {
+              ...entry,
+              members: (entry.members ?? []).filter(
+                (current) => current.id !== member.id && (current.userId ?? current.id) !== memberUserId
+              ),
+            }
           : entry
       );
       saveAccounts(accounts);
+
+      const memberEmail = loadUsers().find((user) => user.id === memberUserId)?.email;
+      if (memberEmail) {
+        saveInvites(
+          loadInvites().map((invite) =>
+            invite.accountId === account.id && normalizeEmail(invite.email) === normalizeEmail(memberEmail)
+              ? { ...invite, revokedAt: Date.now(), acceptedAt: invite.acceptedAt ?? Date.now() }
+              : invite
+          )
+        );
+      }
+
       renderTeams();
+      renderInvites();
       updateReports();
     });
 
@@ -1332,6 +1427,18 @@ const renderTeams = () => {
           return { ...entry, members: updatedMembers };
         });
 
+        const updatedUsersByTeam = loadUsers().map((user) => {
+          if (user.id !== memberId || user.accountId !== account.id) {
+            return user;
+          }
+          const existingTeamIds = user.teamIds ?? [];
+          if (existingTeamIds.includes(team.id)) {
+            return user;
+          }
+          return { ...user, teamIds: [...existingTeamIds, team.id] };
+        });
+
+        saveUsers(updatedUsersByTeam);
         saveAccounts(updatedAccounts);
         renderTeams();
         updateReports();
@@ -1344,6 +1451,7 @@ const renderTeams = () => {
   syncTeamSelectors();
   renderInvites();
 };
+
 
 const parseDateOnly = (dateString) => {
   const [year, month, day] = dateString.split("-").map(Number);
@@ -2025,7 +2133,7 @@ const deleteCurrentBoard = () => {
   setCurrentBoardId(nextBoardId);
   saveAllColumns(loadAllColumns().filter((column) => column.boardId !== currentBoardId));
   saveTasks(loadAllTasks().filter((task) => task.boardId !== currentBoardId));
-  saveInvites(loadInvites().filter((invite) => invite.boardId !== currentBoardId));
+  saveInvites(loadInvites().filter((invite) => invite.boardId ? invite.boardId !== currentBoardId : true));
   renderBoardSelector();
   renderBoard(getVisibleTasks());
   renderInvites();
@@ -2043,21 +2151,35 @@ inviteForm?.addEventListener("submit", (event) => {
   const formData = new FormData(inviteForm);
   const email = normalizeEmail(formData.get("email")?.toString() ?? "");
   const role = normalizeText(formData.get("role")?.toString() ?? "Member");
-  if (!email) {
+  const account = getCurrentAccount();
+  if (!account || !email) {
     return;
   }
+
+  const hasUserInAnotherCompany = loadUsers().some(
+    (user) => normalizeEmail(user.email) === email && user.accountId && user.accountId !== account.id
+  );
+  if (hasUserInAnotherCompany) {
+    setAuthMessage("Този имейл вече принадлежи на друг акаунт и не може да бъде поканен.");
+    return;
+  }
+
+  const token = generateToken();
   const invites = loadInvites();
   invites.unshift({
     id: `invite-${Date.now()}`,
-    boardId: getCurrentBoardId(),
+    accountId: account.id,
+    invitedByUserId: loadCurrentUser()?.id ?? null,
     email,
     role,
-    tokenHash: "demo-hash",
+    token,
     expiresAt: Date.now() + 48 * 60 * 60 * 1000,
     acceptedAt: null,
+    revokedAt: null,
   });
   saveInvites(invites);
   inviteForm.reset();
+  setAuthMessage(`Поканата е създадена. Линк за регистрация: ${window.location.origin}${window.location.pathname}?invite=${token}`);
   renderInvites();
 });
 

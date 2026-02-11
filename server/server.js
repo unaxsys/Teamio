@@ -18,6 +18,7 @@ const ensureDbShape = (db) => {
   db.resetTokens ??= [];
   db.accounts ??= [];
   db.verificationTokens ??= [];
+  db.invites ??= [];
   return db;
 };
 
@@ -55,8 +56,9 @@ const server = createServer(async (req, res) => {
     const email = normalizeEmail(body.email);
     const password = normalizeText(body.password);
     const companyName = normalizeText(body.companyName);
+    const inviteToken = normalizeText(body.inviteToken);
 
-    if (!name || !email || !companyName || password.length < 6) {
+    if (!name || !email || password.length < 6) {
       send(res, 400, { message: "Невалидни данни за регистрация." });
       return;
     }
@@ -67,16 +69,34 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    const accountId = `account-${Date.now()}`;
-    db.accounts.push({
-      id: accountId,
-      name: companyName,
-      teams: [
-        { id: `team-${Date.now()}-1`, name: "Продуктов екип" },
-        { id: `team-${Date.now()}-2`, name: "Инженерен екип" },
-      ],
-      members: [],
-    });
+    const invite = db.invites.find(
+      (item) =>
+        item.token === inviteToken &&
+        normalizeEmail(item.email) === email &&
+        !item.usedAt &&
+        !item.revokedAt &&
+        item.expiresAt > Date.now()
+    );
+
+    if (!invite && !companyName) {
+      send(res, 400, { message: "Липсва име на фирма за нова регистрация." });
+      return;
+    }
+
+    let accountId = invite?.accountId;
+    if (!accountId) {
+      accountId = `account-${Date.now()}`;
+      db.accounts.push({
+        id: accountId,
+        name: companyName,
+        ownerUserId: null,
+        teams: [
+          { id: `team-${Date.now()}-1`, name: "Продуктов екип" },
+          { id: `team-${Date.now()}-2`, name: "Инженерен екип" },
+        ],
+        members: [],
+      });
+    }
 
     const newUser = {
       id: `user-${Date.now()}`,
@@ -84,8 +104,36 @@ const server = createServer(async (req, res) => {
       email,
       password: hashPassword(password),
       accountId,
+      role: invite?.role ?? "Собственик",
+      teamIds: [],
       isEmailVerified: false,
     };
+
+    db.accounts = db.accounts.map((account) => {
+      if (account.id !== accountId) {
+        return account;
+      }
+
+      const nextAccount = {
+        ...account,
+        members: [
+          ...(account.members ?? []).filter((member) => normalizeEmail(member.email ?? "") !== email),
+          { id: newUser.id, userId: newUser.id, name, email, role: invite?.role ?? "Member", teamIds: [] },
+        ],
+      };
+
+      if (!invite) {
+        nextAccount.ownerUserId = newUser.id;
+      }
+
+      return nextAccount;
+    });
+
+    if (invite) {
+      db.invites = db.invites.map((item) =>
+        item.id === invite.id ? { ...item, usedAt: Date.now(), acceptedUserId: newUser.id } : item
+      );
+    }
 
     const verifyToken = randomBytes(24).toString("hex");
     const verifyTokenHash = createHash("sha256").update(verifyToken).digest("hex");
@@ -106,6 +154,7 @@ const server = createServer(async (req, res) => {
     send(res, 201, { message: "Пратихме линк за потвърждение на имейла.", verificationLink });
     return;
   }
+
 
   if (req.url === "/api/auth/verify-email" && req.method === "POST") {
     const body = await readBody(req);
@@ -167,7 +216,7 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    send(res, 200, { user: { id: user.id, name: user.name, email: user.email, accountId: user.accountId } });
+    send(res, 200, { user: { id: user.id, name: user.name, email: user.email, accountId: user.accountId, role: user.role, teamIds: user.teamIds ?? [] } });
     return;
   }
 

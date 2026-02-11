@@ -1,5 +1,7 @@
 {
   "users": [],
   "resetTokens": [],
-  "accounts": []
+  "accounts": [],
+  "verificationTokens": [],
+  "invites": []
 }
