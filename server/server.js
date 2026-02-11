@@ -37,59 +37,69 @@ const normalizeText = (value = "") => value.trim();
 const EMAIL_PROVIDER = normalizeText(process.env.EMAIL_PROVIDER || "resend").toLowerCase();
 const EMAIL_FROM = normalizeText(process.env.EMAIL_FROM || "");
 const EMAIL_REPLY_TO = normalizeText(process.env.EMAIL_REPLY_TO || "");
+const EMAIL_DEBUG = String(process.env.EMAIL_DEBUG || "false").toLowerCase() === "true";
 
 const RESEND_API_KEY = normalizeText(process.env.RESEND_API_KEY || "");
 const BREVO_API_KEY = normalizeText(process.env.BREVO_API_KEY || "");
 
-const getEmailStatus = () => {
-  if (!EMAIL_FROM) {
-    return { configured: false, reason: "Липсва EMAIL_FROM." };
-  }
-
-  if (EMAIL_PROVIDER === "brevo") {
-    if (!BREVO_API_KEY) {
-      return { configured: false, reason: "Липсва BREVO_API_KEY за EMAIL_PROVIDER=brevo." };
-    }
-    return { configured: true, provider: "brevo" };
-  }
-
-  if (!RESEND_API_KEY) {
-    return { configured: false, reason: "Липсва RESEND_API_KEY за EMAIL_PROVIDER=resend." };
-  }
-
-  return { configured: true, provider: "resend" };
+const getConfiguredProviders = () => {
+  const providers = [];
+  if (RESEND_API_KEY) providers.push("resend");
+  if (BREVO_API_KEY) providers.push("brevo");
+  return providers;
 };
 
-const sendEmail = async ({ to, subject, html, text }) => {
-  const status = getEmailStatus();
-  if (!status.configured) {
-    throw new Error(status.reason);
+const getEmailStatus = () => {
+  if (!EMAIL_FROM) {
+    return {
+      configured: false,
+      reason: "Липсва EMAIL_FROM.",
+      preferredProvider: EMAIL_PROVIDER,
+      availableProviders: getConfiguredProviders(),
+    };
   }
 
-  if (status.provider === "brevo") {
-    const response = await fetch("https://api.brevo.com/v3/smtp/email", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "api-key": BREVO_API_KEY,
-      },
-      body: JSON.stringify({
-        sender: { email: EMAIL_FROM },
-        to: [{ email: to }],
-        subject,
-        htmlContent: html,
-        textContent: text,
-        ...(EMAIL_REPLY_TO ? { replyTo: { email: EMAIL_REPLY_TO } } : {}),
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Brevo API error: ${response.status} ${errorText}`);
-    }
-    return;
+  const availableProviders = getConfiguredProviders();
+  if (availableProviders.length === 0) {
+    return {
+      configured: false,
+      reason: "Липсва API ключ за email provider (RESEND_API_KEY или BREVO_API_KEY).",
+      preferredProvider: EMAIL_PROVIDER,
+      availableProviders,
+    };
   }
 
+  return {
+    configured: true,
+    preferredProvider: EMAIL_PROVIDER,
+    availableProviders,
+  };
+};
+
+const sendWithBrevo = async ({ to, subject, html, text }) => {
+  const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "api-key": BREVO_API_KEY,
+    },
+    body: JSON.stringify({
+      sender: { email: EMAIL_FROM },
+      to: [{ email: to }],
+      subject,
+      htmlContent: html,
+      textContent: text,
+      ...(EMAIL_REPLY_TO ? { replyTo: { email: EMAIL_REPLY_TO } } : {}),
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Brevo API error: ${response.status} ${errorText}`);
+  }
+};
+
+const sendWithResend = async ({ to, subject, html, text }) => {
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
@@ -110,6 +120,36 @@ const sendEmail = async ({ to, subject, html, text }) => {
     const errorText = await response.text();
     throw new Error(`Resend API error: ${response.status} ${errorText}`);
   }
+};
+
+const sendEmail = async (payload) => {
+  const status = getEmailStatus();
+  if (!status.configured) {
+    throw new Error(status.reason);
+  }
+
+  const providersInOrder = [EMAIL_PROVIDER, ...status.availableProviders].filter(
+    (provider, index, arr) => arr.indexOf(provider) === index
+  );
+
+  let lastError = null;
+  for (const provider of providersInOrder) {
+    try {
+      if (provider === "brevo" && BREVO_API_KEY) {
+        await sendWithBrevo(payload);
+        return;
+      }
+      if (provider === "resend" && RESEND_API_KEY) {
+        await sendWithResend(payload);
+        return;
+      }
+    } catch (error) {
+      lastError = error;
+      console.error(`[Teamio] Грешка при изпращане през ${provider}:`, error);
+    }
+  }
+
+  throw lastError || new Error("Неуспешно изпращане на имейл. Няма активен доставчик.");
 };
 
 const readDb = async () => {
@@ -325,6 +365,7 @@ const server = createServer(async (req, res) => {
       console.error("[Teamio] Грешка при изпращане на verification имейл:", error);
       send(res, 500, {
         message: "Не успяхме да изпратим имейл за потвърждение. Свържи се с администратор.",
+        ...(EMAIL_DEBUG ? { error: String(error?.message ?? error), emailStatus: getEmailStatus() } : {}),
       });
       return;
     }
@@ -420,7 +461,10 @@ const server = createServer(async (req, res) => {
         });
       } catch (error) {
         console.error("[Teamio] Грешка при изпращане на reset имейл:", error);
-        send(res, 500, { message: "Не успяхме да изпратим имейл за смяна на парола." });
+        send(res, 500, {
+          message: "Не успяхме да изпратим имейл за смяна на парола.",
+          ...(EMAIL_DEBUG ? { error: String(error?.message ?? error), emailStatus: getEmailStatus() } : {}),
+        });
         return;
       }
 
@@ -645,6 +689,6 @@ server.listen(PORT, HOST, () => {
   const emailStatus = getEmailStatus();
   console.log(`Teamio server слуша на ${BASE_URL} (bind: ${HOST}:${PORT})`);
   console.log(
-    `[Teamio] Имейл статус: ${emailStatus.configured ? `конфигуриран (${emailStatus.provider})` : `грешка (${emailStatus.reason})`}`
+    `[Teamio] Имейл статус: ${emailStatus.configured ? `конфигуриран (preferred=${emailStatus.preferredProvider}, налични=${(emailStatus.availableProviders ?? []).join(",")})` : `грешка (${emailStatus.reason})`}`
   );
 });

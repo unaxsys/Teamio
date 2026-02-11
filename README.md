@@ -57,6 +57,12 @@ npm start
 
 Optional: `EMAIL_REPLY_TO="support@your-domain.com"`.
 
+For debugging delivery errors during setup:
+- set `EMAIL_DEBUG="true"` to receive provider error details in API response.
+- once configured, set it back to `false`.
+
+If both providers are configured, Teamio first tries `EMAIL_PROVIDER`, then automatically retries with the other provider.
+
 Check current email configuration status:
 ```bash
 curl http://localhost:8787/api/health/email
