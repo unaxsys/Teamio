@@ -8,7 +8,7 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const DB_PATH = path.join(__dirname, "../db.json");
+const DB_PATH = path.join(__dirname, "db.json");
 const PORT = Number(process.env.PORT ?? 8787);
 const HOST = process.env.HOST || "0.0.0.0";
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
@@ -33,7 +33,18 @@ const hashPassword = (password) => createHash("sha256").update(password).digest(
 const normalizeEmail = (email = "") => email.trim().toLowerCase();
 const normalizeText = (value = "") => value.trim();
 
-const readDb = async () => JSON.parse(await readFile(DB_PATH, "utf8"));
+const readDb = async () => {
+  try {
+    return JSON.parse(await readFile(DB_PATH, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      const fallbackDb = ensureDbShape({});
+      await writeDb(fallbackDb);
+      return fallbackDb;
+    }
+    throw error;
+  }
+};
 const writeDb = async (db) => writeFile(DB_PATH, JSON.stringify(db, null, 2));
 
 const ensureDbShape = (db) => {
