@@ -11,7 +11,7 @@ const __dirname = path.dirname(__filename);
 const DB_PATH = path.join(__dirname, "db.json");
 const PORT = Number(process.env.PORT ?? 8787);
 const HOST = process.env.HOST || "0.0.0.0";
-const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
+const BASE_URL = (process.env.BASE_URL || "").trim();
 const WEB_DIR = path.join(__dirname, "../web");
 
 const STATIC_CONTENT_TYPES = {
@@ -47,6 +47,20 @@ const getConfiguredProviders = () => {
   if (RESEND_API_KEY) providers.push("resend");
   if (BREVO_API_KEY) providers.push("brevo");
   return providers;
+};
+
+
+const getPublicBaseUrl = (req) => {
+  if (BASE_URL) {
+    return BASE_URL;
+  }
+
+  const forwardedProto = normalizeText(req?.headers?.["x-forwarded-proto"] || "").split(",")[0];
+  const forwardedHost = normalizeText(req?.headers?.["x-forwarded-host"] || "").split(",")[0];
+  const host = forwardedHost || normalizeText(req?.headers?.host || "") || `localhost:${PORT}`;
+  const protocol = forwardedProto || (host.startsWith("localhost") || host.startsWith("127.0.0.1") ? "http" : "https");
+
+  return `${protocol}://${host}`;
 };
 
 const getEmailStatus = () => {
@@ -259,7 +273,7 @@ const server = createServer(async (req, res) => {
 
   if (requestUrl.pathname === "/api/health/email" && req.method === "GET") {
     const status = getEmailStatus();
-    send(res, 200, { ok: true, email: status });
+    send(res, 200, { ok: true, email: status, baseUrl: getPublicBaseUrl(req), baseUrlFromEnv: Boolean(BASE_URL) });
     return;
   }
 
@@ -358,7 +372,7 @@ const server = createServer(async (req, res) => {
       usedAt: null,
     });
 
-    const verificationLink = `${BASE_URL}/?verify=${verifyToken}`;
+    const verificationLink = `${getPublicBaseUrl(req)}/?verify=${verifyToken}`;
 
     let verificationEmailResult;
     try {
@@ -466,7 +480,7 @@ const server = createServer(async (req, res) => {
 
     if (user) {
       const token = randomBytes(16).toString("hex");
-      const resetLink = `${BASE_URL}/?reset=${token}`;
+      const resetLink = `${getPublicBaseUrl(req)}/?reset=${token}`;
 
       let resetEmailResult;
       try {
@@ -713,7 +727,11 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   const emailStatus = getEmailStatus();
-  console.log(`Teamio server слуша на ${BASE_URL} (bind: ${HOST}:${PORT})`);
+  const startupBaseUrl = BASE_URL || `http://localhost:${PORT}`;
+  console.log(`Teamio server слуша на ${startupBaseUrl} (bind: ${HOST}:${PORT})`);
+  if (!BASE_URL) {
+    console.warn("[Teamio] BASE_URL не е зададен. Линковете ще се генерират по host от заявката. За production задай BASE_URL.");
+  }
   console.log(
     `[Teamio] Имейл статус: ${emailStatus.configured ? `конфигуриран (preferred=${emailStatus.preferredProvider}, налични=${(emailStatus.availableProviders ?? []).join(",")})` : `грешка (${emailStatus.reason})`}`
   );

@@ -96,12 +96,15 @@ pm2 save
 curl -s http://127.0.0.1:8787/api/health/email
 ```
 Expected: `"configured": true` and at least one provider in `availableProviders`.
+Also verify `"baseUrl"` is your public domain/IP (not `localhost`).
 
 If you change `.env`, reload PM2:
 ```bash
 cd server
 pm2 restart teamio-api --update-env
 ```
+
+If `baseUrl` is `localhost` in production, set `BASE_URL` in `server/.env` to your public URL (example `https://teamio.your-domain.com`).
 
 
 By default the web app still works in local demo mode.
