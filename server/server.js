@@ -5,8 +5,7 @@ import { resolve } from "node:path";
 
 const DB_PATH = resolve("./db.json");
 const PORT = Number(process.env.PORT ?? 8787);
-const BASE_URL = process.env.BASE_URL || `${BASE_URL}`;
-
+const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 
 const hashPassword = (password) => createHash("sha256").update(password).digest("hex");
 const normalizeEmail = (email = "") => email.trim().toLowerCase();
