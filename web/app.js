@@ -40,6 +40,10 @@ const teamList = document.getElementById("team-list");
 const teamCatalog = document.getElementById("team-catalog");
 const inviteForm = document.getElementById("invite-form");
 const inviteList = document.getElementById("invite-list");
+const myInviteList = document.getElementById("my-invite-list");
+const inviteShareBox = document.getElementById("invite-share");
+const inviteShareLink = document.getElementById("invite-share-link");
+const inviteCopyLinkButton = document.getElementById("invite-copy-link");
 const memberTeamIdsSelect = document.getElementById("member-team-ids");
 const taskTeamIdsSelect = document.getElementById("task-team-ids");
 const boardTeamFilter = document.getElementById("board-team-filter");
@@ -498,6 +502,39 @@ const apiRequest = async (path, options = {}) => {
   }
 };
 
+const syncInvitesFromApi = async () => {
+  const user = loadCurrentUser();
+  if (!user) {
+    return;
+  }
+
+  const params = new URLSearchParams();
+  if (user.accountId) {
+    params.set("accountId", user.accountId);
+  }
+  if (user.email) {
+    params.set("email", normalizeEmail(user.email));
+  }
+
+  if (!params.toString()) {
+    return;
+  }
+
+  const apiResult = await apiRequest(`/api/invites?${params.toString()}`);
+  if (apiResult?.ok && Array.isArray(apiResult.data?.invites)) {
+    saveInvites(apiResult.data.invites);
+  }
+};
+
+const apiHasUserInAnotherAccount = async (email, accountId) => {
+  const apiResult = await apiRequest(`/api/users/by-email?email=${encodeURIComponent(normalizeEmail(email))}`);
+  if (!apiResult?.ok) {
+    return false;
+  }
+  const user = apiResult.data?.user;
+  return Boolean(user?.accountId && user.accountId !== accountId);
+};
+
 const hashPassword = async (password) => {
   const data = new TextEncoder().encode(password);
   const hashBuffer = await crypto.subtle.digest("SHA-256", data);
@@ -597,7 +634,7 @@ const updateProfile = (user) => {
     .slice(0, 2);
 };
 
-const showApp = (user) => {
+const showApp = async (user) => {
   const normalizedUser = ensureAccountForUser(user);
   authScreenEl.style.display = "none";
   appEl.classList.remove("app--hidden");
@@ -605,8 +642,11 @@ const showApp = (user) => {
   applyManagementAccessUi();
   renderBoardSelector();
   syncTeamSelectors();
+  await syncInvitesFromApi();
   renderBoard(getVisibleTasks());
   renderTeams();
+  renderInvites();
+  renderMyInvites();
   updateReports();
 };
 
@@ -626,7 +666,7 @@ const handleLogin = async (email, password) => {
   if (apiResult?.ok && apiResult.data?.user) {
     setCurrentUser(apiResult.data.user);
     setAuthMessage("");
-    showApp(apiResult.data.user);
+    await showApp(apiResult.data.user);
     return;
   }
 
@@ -665,7 +705,7 @@ const handleLogin = async (email, password) => {
 
   setCurrentUser(user);
   setAuthMessage("");
-  showApp(user);
+  await showApp(user);
 };
 
 const handleRegister = async (name, email, password, companyName) => {
@@ -678,24 +718,23 @@ const handleRegister = async (name, email, password, companyName) => {
   const matchingInvite = loadInvites()
     .filter((invite) => !invite.acceptedAt && !invite.revokedAt && invite.expiresAt > Date.now() && invite.token === inviteToken)
     .find((invite) => normalizeEmail(invite.email) === normalizedEmail);
+  const hasInviteToken = Boolean(inviteToken);
 
-  if (!normalizedName || !normalizedEmail || normalizedPassword.length < 6 || (!matchingInvite && !normalizedCompanyName)) {
+  if (!normalizedName || !normalizedEmail || normalizedPassword.length < 6 || (!hasInviteToken && !matchingInvite && !normalizedCompanyName)) {
     setAuthMessage("Попълни коректно всички полета.");
     return;
   }
 
-  const apiResult = matchingInvite
-    ? null
-    : await apiRequest("/api/auth/register", {
-        method: "POST",
-        body: JSON.stringify({
-          name: normalizedName,
-          email: normalizedEmail,
-          password: normalizedPassword,
-          companyName: normalizedCompanyName,
-          inviteToken,
-        }),
-      });
+  const apiResult = await apiRequest("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({
+      name: normalizedName,
+      email: normalizedEmail,
+      password: normalizedPassword,
+      companyName: normalizedCompanyName,
+      inviteToken,
+    }),
+  });
 
   if (apiResult?.ok) {
     setAuthMessage("Регистрацията е успешна. Провери имейла си и потвърди акаунта преди вход.");
@@ -1207,6 +1246,22 @@ const saveInvites = (invites) => {
   localStorage.setItem("teamio-invites", JSON.stringify(invites));
 };
 
+const getInviteStatusLabel = (invite) => {
+  if (invite.acceptedAt) {
+    return "Приета";
+  }
+  if (invite.declinedAt) {
+    return "Отказана";
+  }
+  if (invite.revokedAt) {
+    return "Отменена";
+  }
+  if (invite.expiresAt < Date.now()) {
+    return "Изтекла";
+  }
+  return "Активна";
+};
+
 const renderInvites = () => {
   if (!inviteList) {
     return;
@@ -1224,11 +1279,123 @@ const renderInvites = () => {
   }
 
   invites.forEach((invite) => {
-    const status = invite.acceptedAt ? "Приета" : invite.expiresAt < Date.now() ? "Изтекла" : "Активна";
+    const status = getInviteStatusLabel(invite);
     const item = document.createElement("div");
     item.className = "panel-list__item";
     item.innerHTML = `<div><strong>${invite.email}</strong><div class="panel-list__meta">Роля: ${invite.role} · ${status}</div></div>`;
     inviteList.append(item);
+  });
+};
+
+const renderMyInvites = () => {
+  if (!myInviteList) {
+    return;
+  }
+
+  const currentUser = loadCurrentUser();
+  if (!currentUser?.email) {
+    myInviteList.innerHTML = "";
+    return;
+  }
+
+  const invites = loadInvites().filter((invite) => normalizeEmail(invite.email) === normalizeEmail(currentUser.email));
+  myInviteList.innerHTML = "";
+
+  if (invites.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "panel-list__item";
+    empty.innerHTML = '<div><strong>Нямаш покани</strong><div class="panel-list__meta">Когато те поканят, ще се покажат тук.</div></div>';
+    myInviteList.append(empty);
+    return;
+  }
+
+  const accounts = loadAccounts();
+
+  invites.forEach((invite) => {
+    const accountName = accounts.find((account) => account.id === invite.accountId)?.name ?? "Неизвестна фирма";
+    const item = document.createElement("div");
+    item.className = "panel-list__item panel-list__item--stack";
+
+    const status = getInviteStatusLabel(invite);
+    item.innerHTML = `<div><strong>${accountName}</strong><div class="panel-list__meta">${invite.email} · Роля: ${invite.role} · ${status}</div></div>`;
+
+    const canRespond = !invite.acceptedAt && !invite.declinedAt && !invite.revokedAt && invite.expiresAt > Date.now();
+    if (canRespond) {
+      const actions = document.createElement("div");
+      actions.className = "invite-actions";
+
+      const acceptButton = document.createElement("button");
+      acceptButton.type = "button";
+      acceptButton.className = "primary";
+      acceptButton.textContent = "Приеми";
+      acceptButton.addEventListener("click", async () => {
+        const apiResult = await apiRequest("/api/invites/respond", {
+          method: "POST",
+          body: JSON.stringify({ inviteId: invite.id, action: "accept", userId: currentUser.id, email: currentUser.email }),
+        });
+
+        if (apiResult?.ok) {
+          await syncInvitesFromApi();
+        } else {
+          const updatedInvites = loadInvites().map((entry) =>
+            entry.id === invite.id
+              ? { ...entry, acceptedAt: Date.now(), acceptedUserId: currentUser.id, declinedAt: null }
+              : entry
+          );
+          saveInvites(updatedInvites);
+        }
+
+        const users = loadUsers();
+        const updatedUsers = users.map((user) => {
+          if (normalizeEmail(user.email) !== normalizeEmail(currentUser.email)) {
+            return user;
+          }
+          const teamIds = Array.isArray(user.teamIds) ? user.teamIds : [];
+          return { ...user, accountId: invite.accountId, role: invite.role, teamIds };
+        });
+        saveUsers(updatedUsers);
+
+        const nextCurrentUser = { ...currentUser, accountId: invite.accountId, role: invite.role, teamIds: currentUser.teamIds ?? [] };
+        setCurrentUser(nextCurrentUser);
+
+        renderInvites();
+        renderMyInvites();
+        renderTeams();
+        syncTeamSelectors();
+        renderBoard(getVisibleTasks());
+        updateReports();
+        setAuthMessage(`Прие поканата за ${accountName}.`);
+      });
+
+      const declineButton = document.createElement("button");
+      declineButton.type = "button";
+      declineButton.className = "ghost";
+      declineButton.textContent = "Откажи";
+      declineButton.addEventListener("click", async () => {
+        const apiResult = await apiRequest("/api/invites/respond", {
+          method: "POST",
+          body: JSON.stringify({ inviteId: invite.id, action: "decline", userId: currentUser.id, email: currentUser.email }),
+        });
+
+        if (apiResult?.ok) {
+          await syncInvitesFromApi();
+        } else {
+          const updatedInvites = loadInvites().map((entry) =>
+            entry.id === invite.id
+              ? { ...entry, declinedAt: Date.now(), declinedUserId: currentUser.id }
+              : entry
+          );
+          saveInvites(updatedInvites);
+        }
+        renderInvites();
+        renderMyInvites();
+      });
+
+      actions.append(acceptButton, declineButton);
+      item.append(actions);
+    }
+
+    myInviteList.append(item);
   });
 };
 
@@ -2143,7 +2310,7 @@ renameBoardButton?.addEventListener("click", renameCurrentBoard);
 
 deleteBoardButton?.addEventListener("click", deleteCurrentBoard);
 
-inviteForm?.addEventListener("submit", (event) => {
+inviteForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!hasManagementAccess()) {
     return;
@@ -2156,31 +2323,75 @@ inviteForm?.addEventListener("submit", (event) => {
     return;
   }
 
-  const hasUserInAnotherCompany = loadUsers().some(
+  const hasUserInAnotherCompanyApi = await apiHasUserInAnotherAccount(email, account.id);
+  const hasUserInAnotherCompanyLocal = loadUsers().some(
     (user) => normalizeEmail(user.email) === email && user.accountId && user.accountId !== account.id
   );
+  const hasUserInAnotherCompany = hasUserInAnotherCompanyApi || hasUserInAnotherCompanyLocal;
   if (hasUserInAnotherCompany) {
     setAuthMessage("Този имейл вече принадлежи на друг акаунт и не може да бъде поканен.");
     return;
   }
 
-  const token = generateToken();
-  const invites = loadInvites();
-  invites.unshift({
+  const localToken = generateToken();
+  let invite = {
     id: `invite-${Date.now()}`,
     accountId: account.id,
     invitedByUserId: loadCurrentUser()?.id ?? null,
     email,
     role,
-    token,
+    token: localToken,
     expiresAt: Date.now() + 48 * 60 * 60 * 1000,
     acceptedAt: null,
+    declinedAt: null,
     revokedAt: null,
+  };
+
+  const apiResult = await apiRequest("/api/invites", {
+    method: "POST",
+    body: JSON.stringify({
+      accountId: account.id,
+      invitedByUserId: loadCurrentUser()?.id ?? null,
+      email,
+      role,
+    }),
   });
-  saveInvites(invites);
+
+  if (apiResult?.ok && apiResult.data?.invite) {
+    invite = apiResult.data.invite;
+    await syncInvitesFromApi();
+  } else {
+    const invites = loadInvites();
+    invites.unshift(invite);
+    saveInvites(invites);
+  }
+
   inviteForm.reset();
-  setAuthMessage(`Поканата е създадена. Линк за регистрация: ${window.location.origin}${window.location.pathname}?invite=${token}`);
+
+  const inviteLink = `${window.location.origin}${window.location.pathname}?invite=${invite.token}`;
+  if (inviteShareBox && inviteShareLink) {
+    inviteShareBox.hidden = false;
+    inviteShareLink.href = inviteLink;
+    inviteShareLink.textContent = inviteLink;
+  }
+
+  setAuthMessage("Поканата е създадена успешно.");
   renderInvites();
+  renderMyInvites();
+});
+
+inviteCopyLinkButton?.addEventListener("click", async () => {
+  const link = inviteShareLink?.href;
+  if (!link) {
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(link);
+    setAuthMessage("Линкът за поканата е копиран.");
+  } catch (error) {
+    setAuthMessage("Неуспешно копиране. Копирай линка ръчно.");
+  }
 });
 
 newBoardButton.addEventListener("click", openTaskModal);
@@ -2256,6 +2467,8 @@ loadTheme();
 loadDensity();
 renderBoard(initialTasks);
 renderTeams();
+renderInvites();
+renderMyInvites();
 renderCalendar();
 updateReports();
 
