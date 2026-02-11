@@ -89,6 +89,7 @@ const menuOpenSettingsButton = document.getElementById("menu-open-settings");
 const menuAddColumnButton = document.getElementById("menu-add-column");
 const menuNewTaskButton = document.getElementById("menu-new-task");
 const menuRenameBoardButton = document.getElementById("menu-rename-board");
+const menuDeleteBoardButton = document.getElementById("menu-delete-board");
 
 let boardSearchQuery = "";
 
@@ -1953,7 +1954,12 @@ menuNewTaskButton?.addEventListener("click", () => {
 });
 
 menuRenameBoardButton?.addEventListener("click", () => {
-  renameBoardButton?.click();
+  renameCurrentBoard();
+  toggleBoardMenu(false);
+});
+
+menuDeleteBoardButton?.addEventListener("click", () => {
+  deleteCurrentBoard();
   toggleBoardMenu(false);
 });
 
@@ -1977,7 +1983,7 @@ createBoardButton?.addEventListener("click", () => {
   renderInvites();
 });
 
-renameBoardButton?.addEventListener("click", () => {
+const renameCurrentBoard = () => {
   if (!hasManagementAccess()) {
     return;
   }
@@ -1993,9 +1999,9 @@ renameBoardButton?.addEventListener("click", () => {
   }
   saveBoards(boards.map((board) => (board.id === currentBoardId ? { ...board, name: nextName.trim() } : board)));
   renderBoardSelector();
-});
+};
 
-deleteBoardButton?.addEventListener("click", () => {
+const deleteCurrentBoard = () => {
   if (!hasManagementAccess()) {
     return;
   }
@@ -2023,7 +2029,11 @@ deleteBoardButton?.addEventListener("click", () => {
   renderBoardSelector();
   renderBoard(getVisibleTasks());
   renderInvites();
-});
+};
+
+renameBoardButton?.addEventListener("click", renameCurrentBoard);
+
+deleteBoardButton?.addEventListener("click", deleteCurrentBoard);
 
 inviteForm?.addEventListener("submit", (event) => {
   event.preventDefault();
