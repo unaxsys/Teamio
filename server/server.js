@@ -435,6 +435,7 @@ const server = createServer(async (req, res) => {
   send(res, 404, { message: "Not found" });
 });
 
-server.listen(PORT, () => {
-  console.log(`Teamio server слуша на http://localhost:${PORT}`);
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`Teamio server слуша на ${BASE_URL}`);
 });
+
