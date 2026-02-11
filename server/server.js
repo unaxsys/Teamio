@@ -1,13 +1,18 @@
 import { createServer } from "node:http";
+import fs from "fs";
+import path from "path";
 import { readFile, writeFile } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
-import { extname, resolve } from "node:path";
+import { fileURLToPath } from "url";
 
-const DB_PATH = resolve("./db.json");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const DB_PATH = path.join(__dirname, "../db.json");
 const PORT = Number(process.env.PORT ?? 8787);
 const HOST = process.env.HOST || "0.0.0.0";
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
-const WEB_ROOT = resolve("./web");
+const WEB_DIR = path.join(__dirname, "../web");
 
 const STATIC_CONTENT_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -67,8 +72,9 @@ const sendStatic = (res, statusCode, body, contentType) => {
 
 const resolveStaticPath = (pathname) => {
   const relativePath = decodeURIComponent(pathname).replace(/^\/+/, "");
-  const requestedPath = resolve(WEB_ROOT, relativePath || "index.html");
-  if (!requestedPath.startsWith(WEB_ROOT)) {
+  const requestedPath = path.resolve(WEB_DIR, relativePath || "index.html");
+  const normalizedWebDir = `${WEB_DIR}${path.sep}`;
+  if (requestedPath !== WEB_DIR && !requestedPath.startsWith(normalizedWebDir)) {
     return null;
   }
   return requestedPath;
@@ -87,12 +93,12 @@ const serveStaticFile = async (req, res, requestUrl) => {
 
   try {
     const file = await readFile(requestedPath);
-    const contentType = STATIC_CONTENT_TYPES[extname(requestedPath).toLowerCase()] || "application/octet-stream";
+    const contentType = STATIC_CONTENT_TYPES[path.extname(requestedPath).toLowerCase()] || "application/octet-stream";
     sendStatic(res, 200, req.method === "HEAD" ? "" : file, contentType);
     return true;
   } catch {
     try {
-      const indexFilePath = resolve(WEB_ROOT, "index.html");
+      const indexFilePath = path.join(WEB_DIR, "index.html");
       const indexFile = await readFile(indexFilePath);
       sendStatic(res, 200, req.method === "HEAD" ? "" : indexFile, STATIC_CONTENT_TYPES[".html"]);
       return true;
@@ -492,6 +498,15 @@ const server = createServer(async (req, res) => {
     const updatedInvite = db.invites.find((item) => item.id === inviteId) ?? null;
     send(res, 200, { invite: updatedInvite });
     return;
+  }
+
+  if (req.method === "GET" && requestUrl.pathname === "/") {
+    const indexPath = path.join(WEB_DIR, "index.html");
+
+    if (fs.existsSync(indexPath)) {
+      res.writeHead(200, { "Content-Type": "text/html" });
+      return res.end(fs.readFileSync(indexPath));
+    }
   }
 
   const servedStatic = await serveStaticFile(req, res, requestUrl);
