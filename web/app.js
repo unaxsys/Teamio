@@ -480,13 +480,27 @@ const applyManagementAccessUi = () => {
   });
 };
 
-const loadApiBase = () => localStorage.getItem("teamio-api-base") ?? "";
+const loadApiBase = () => {
+  const storedBase = (localStorage.getItem("teamio-api-base") ?? "").trim();
+  const currentOrigin = window.location.origin;
+
+  if (!storedBase) {
+    return currentOrigin;
+  }
+
+  try {
+    const parsed = new URL(storedBase, currentOrigin);
+    if (window.location.hostname !== "localhost" && ["localhost", "127.0.0.1"].includes(parsed.hostname)) {
+      return currentOrigin;
+    }
+    return parsed.origin;
+  } catch {
+    return currentOrigin;
+  }
+};
 
 const apiRequest = async (path, options = {}) => {
   const base = loadApiBase();
-  if (!base) {
-    return null;
-  }
   try {
     const response = await fetch(`${base}${path}`, {
       headers: { "Content-Type": "application/json", ...(options.headers ?? {}) },
@@ -536,8 +550,13 @@ const apiHasUserInAnotherAccount = async (email, accountId) => {
 };
 
 const hashPassword = async (password) => {
+  const subtleCrypto = globalThis.crypto?.subtle;
+  if (!subtleCrypto) {
+    return password;
+  }
+
   const data = new TextEncoder().encode(password);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashBuffer = await subtleCrypto.digest("SHA-256", data);
   return Array.from(new Uint8Array(hashBuffer))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
@@ -743,81 +762,7 @@ const handleRegister = async (name, email, password, companyName) => {
     return;
   }
 
-  const users = loadUsers();
-  const accounts = loadAccounts();
-  if (users.some((item) => normalizeEmail(item.email) === normalizedEmail)) {
-    setAuthMessage(apiResult?.data?.message ?? "Този имейл вече е регистриран.");
-    return;
-  }
-
-  const accountId = matchingInvite?.accountId ?? `account-${Date.now()}`;
-  if (!matchingInvite) {
-    const defaultTeams = [
-      { id: `team-${Date.now()}-1`, name: "Продуктов екип" },
-      { id: `team-${Date.now()}-2`, name: "Инженерен екип" },
-    ];
-    accounts.push({ id: accountId, name: normalizedCompanyName, ownerUserId: `user-${Date.now()}`, teams: defaultTeams, members: [] });
-    saveAccounts(accounts);
-  }
-
-  const newUserId = `user-${Date.now()}`;
-  const hashed = await hashPassword(normalizedPassword);
-  const newUser = {
-    id: newUserId,
-    name: normalizedName,
-    email: normalizedEmail,
-    password: hashed,
-    role: matchingInvite?.role ?? "Собственик",
-    accountId,
-    isEmailVerified: false,
-    teamIds: [],
-  };
-
-  const updatedAccounts = loadAccounts().map((account) => {
-    if (account.id !== accountId) {
-      return account;
-    }
-
-    const nextAccount = {
-      ...account,
-      members: [
-        ...(account.members ?? []).filter((member) => normalizeEmail(member.email ?? "") !== normalizedEmail),
-        {
-          id: newUserId,
-          userId: newUserId,
-          name: normalizedName,
-          email: normalizedEmail,
-          role: matchingInvite?.role ?? "Member",
-          teamIds: [],
-        },
-      ],
-    };
-
-    if (!matchingInvite) {
-      nextAccount.ownerUserId = newUserId;
-    }
-
-    return nextAccount;
-  });
-  saveAccounts(updatedAccounts);
-
-  if (matchingInvite) {
-    saveInvites(
-      loadInvites().map((invite) =>
-        invite.id === matchingInvite.id ? { ...invite, acceptedAt: Date.now(), acceptedUserId: newUserId } : invite
-      )
-    );
-  }
-
-  const updated = [...users, newUser];
-  saveUsers(updated);
-  const verificationToken = generateToken();
-  const verificationTokens = loadVerificationTokens();
-  verificationTokens.push({ token: verificationToken, userId: newUserId, email: normalizedEmail, expiresAt: Date.now() + 24 * 60 * 60 * 1000, usedAt: null });
-  saveVerificationTokens(verificationTokens);
-  setAuthMessage("Регистрацията е успешна. Потвърди имейла си, за да влезеш.");
-  activateAuthForm("login");
-  setVerificationHelp(verificationToken, normalizedEmail);
+  setAuthMessage(apiResult?.data?.message ?? "Регистрацията не беше успешна. Провери данните и опитай отново.");
 };
 
 

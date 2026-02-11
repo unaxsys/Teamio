@@ -1,18 +1,50 @@
 import { createServer } from "node:http";
+import fs from "fs";
+import path from "path";
 import { readFile, writeFile } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
-import { resolve } from "node:path";
+import { fileURLToPath } from "url";
 
-const DB_PATH = resolve("./db.json");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const DB_PATH = path.join(__dirname, "db.json");
 const PORT = Number(process.env.PORT ?? 8787);
 const HOST = process.env.HOST || "0.0.0.0";
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
+const WEB_DIR = path.join(__dirname, "../web");
+
+const STATIC_CONTENT_TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".mjs": "application/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+};
 
 const hashPassword = (password) => createHash("sha256").update(password).digest("hex");
 const normalizeEmail = (email = "") => email.trim().toLowerCase();
 const normalizeText = (value = "") => value.trim();
 
-const readDb = async () => JSON.parse(await readFile(DB_PATH, "utf8"));
+const readDb = async () => {
+  try {
+    return JSON.parse(await readFile(DB_PATH, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      const fallbackDb = ensureDbShape({});
+      await writeDb(fallbackDb);
+      return fallbackDb;
+    }
+    throw error;
+  }
+};
 const writeDb = async (db) => writeFile(DB_PATH, JSON.stringify(db, null, 2));
 
 const ensureDbShape = (db) => {
@@ -39,6 +71,52 @@ const readBody = async (req) => {
   for await (const chunk of req) chunks.push(chunk);
   if (chunks.length === 0) return {};
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+};
+
+const sendStatic = (res, statusCode, body, contentType) => {
+  res.writeHead(statusCode, {
+    "Content-Type": contentType,
+    "Access-Control-Allow-Origin": "*",
+  });
+  res.end(body);
+};
+
+const resolveStaticPath = (pathname) => {
+  const relativePath = decodeURIComponent(pathname).replace(/^\/+/, "");
+  const requestedPath = path.resolve(WEB_DIR, relativePath || "index.html");
+  const normalizedWebDir = `${WEB_DIR}${path.sep}`;
+  if (requestedPath !== WEB_DIR && !requestedPath.startsWith(normalizedWebDir)) {
+    return null;
+  }
+  return requestedPath;
+};
+
+const serveStaticFile = async (req, res, requestUrl) => {
+  if (!["GET", "HEAD"].includes(req.method ?? "")) {
+    return false;
+  }
+
+  const requestedPath = resolveStaticPath(requestUrl.pathname);
+  if (!requestedPath) {
+    send(res, 403, { message: "Forbidden" });
+    return true;
+  }
+
+  try {
+    const file = await readFile(requestedPath);
+    const contentType = STATIC_CONTENT_TYPES[path.extname(requestedPath).toLowerCase()] || "application/octet-stream";
+    sendStatic(res, 200, req.method === "HEAD" ? "" : file, contentType);
+    return true;
+  } catch {
+    try {
+      const indexFilePath = path.join(WEB_DIR, "index.html");
+      const indexFile = await readFile(indexFilePath);
+      sendStatic(res, 200, req.method === "HEAD" ? "" : indexFile, STATIC_CONTENT_TYPES[".html"]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
 };
 
 const server = createServer(async (req, res) => {
@@ -433,10 +511,23 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "GET" && requestUrl.pathname === "/") {
+    const indexPath = path.join(WEB_DIR, "index.html");
+
+    if (fs.existsSync(indexPath)) {
+      res.writeHead(200, { "Content-Type": "text/html" });
+      return res.end(fs.readFileSync(indexPath));
+    }
+  }
+
+  const servedStatic = await serveStaticFile(req, res, requestUrl);
+  if (servedStatic) {
+    return;
+  }
+
   send(res, 404, { message: "Not found" });
 });
 
 server.listen(PORT, HOST, () => {
   console.log(`Teamio server слуша на ${BASE_URL} (bind: ${HOST}:${PORT})`);
 });
-
