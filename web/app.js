@@ -480,13 +480,27 @@ const applyManagementAccessUi = () => {
   });
 };
 
-const loadApiBase = () => localStorage.getItem("teamio-api-base") ?? "";
+const loadApiBase = () => {
+  const storedBase = (localStorage.getItem("teamio-api-base") ?? "").trim();
+  const currentOrigin = window.location.origin;
+
+  if (!storedBase) {
+    return currentOrigin;
+  }
+
+  try {
+    const parsed = new URL(storedBase, currentOrigin);
+    if (window.location.hostname !== "localhost" && ["localhost", "127.0.0.1"].includes(parsed.hostname)) {
+      return currentOrigin;
+    }
+    return parsed.origin;
+  } catch {
+    return currentOrigin;
+  }
+};
 
 const apiRequest = async (path, options = {}) => {
   const base = loadApiBase();
-  if (!base) {
-    return null;
-  }
   try {
     const response = await fetch(`${base}${path}`, {
       headers: { "Content-Type": "application/json", ...(options.headers ?? {}) },
