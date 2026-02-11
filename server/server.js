@@ -34,14 +34,60 @@ const normalizeEmail = (email = "") => email.trim().toLowerCase();
 const normalizeText = (value = "") => value.trim();
 
 
-const RESEND_API_KEY = normalizeText(process.env.RESEND_API_KEY || "");
+const EMAIL_PROVIDER = normalizeText(process.env.EMAIL_PROVIDER || "resend").toLowerCase();
 const EMAIL_FROM = normalizeText(process.env.EMAIL_FROM || "");
+const EMAIL_REPLY_TO = normalizeText(process.env.EMAIL_REPLY_TO || "");
 
-const isEmailConfigured = () => Boolean(RESEND_API_KEY && EMAIL_FROM);
+const RESEND_API_KEY = normalizeText(process.env.RESEND_API_KEY || "");
+const BREVO_API_KEY = normalizeText(process.env.BREVO_API_KEY || "");
+
+const getEmailStatus = () => {
+  if (!EMAIL_FROM) {
+    return { configured: false, reason: "Липсва EMAIL_FROM." };
+  }
+
+  if (EMAIL_PROVIDER === "brevo") {
+    if (!BREVO_API_KEY) {
+      return { configured: false, reason: "Липсва BREVO_API_KEY за EMAIL_PROVIDER=brevo." };
+    }
+    return { configured: true, provider: "brevo" };
+  }
+
+  if (!RESEND_API_KEY) {
+    return { configured: false, reason: "Липсва RESEND_API_KEY за EMAIL_PROVIDER=resend." };
+  }
+
+  return { configured: true, provider: "resend" };
+};
 
 const sendEmail = async ({ to, subject, html, text }) => {
-  if (!isEmailConfigured()) {
-    throw new Error("Имейл услугата не е конфигурирана на сървъра.");
+  const status = getEmailStatus();
+  if (!status.configured) {
+    throw new Error(status.reason);
+  }
+
+  if (status.provider === "brevo") {
+    const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "api-key": BREVO_API_KEY,
+      },
+      body: JSON.stringify({
+        sender: { email: EMAIL_FROM },
+        to: [{ email: to }],
+        subject,
+        htmlContent: html,
+        textContent: text,
+        ...(EMAIL_REPLY_TO ? { replyTo: { email: EMAIL_REPLY_TO } } : {}),
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Brevo API error: ${response.status} ${errorText}`);
+    }
+    return;
   }
 
   const response = await fetch("https://api.resend.com/emails", {
@@ -56,6 +102,7 @@ const sendEmail = async ({ to, subject, html, text }) => {
       subject,
       html,
       text,
+      ...(EMAIL_REPLY_TO ? { reply_to: EMAIL_REPLY_TO } : {}),
     }),
   });
 
@@ -164,6 +211,12 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (requestUrl.pathname === "/api/health/email" && req.method === "GET") {
+    const status = getEmailStatus();
+    send(res, 200, { ok: true, email: status });
+    return;
+  }
+
   if (requestUrl.pathname === "/api/auth/register" && req.method === "POST") {
     const body = await readBody(req);
     const name = normalizeText(body.name);
@@ -259,9 +312,6 @@ const server = createServer(async (req, res) => {
       usedAt: null,
     });
 
-    db.users.push(newUser);
-    await writeDb(db);
-
     const verificationLink = `${BASE_URL}/?verify=${verifyToken}`;
 
     try {
@@ -278,6 +328,9 @@ const server = createServer(async (req, res) => {
       });
       return;
     }
+
+    db.users.push(newUser);
+    await writeDb(db);
 
     send(res, 201, { message: "Пратихме линк за потвърждение на имейла." });
     return;
@@ -356,8 +409,6 @@ const server = createServer(async (req, res) => {
 
     if (user) {
       const token = randomBytes(16).toString("hex");
-      db.resetTokens.push({ token, email, createdAt: Date.now() });
-      await writeDb(db);
       const resetLink = `${BASE_URL}/?reset=${token}`;
 
       try {
@@ -372,6 +423,9 @@ const server = createServer(async (req, res) => {
         send(res, 500, { message: "Не успяхме да изпратим имейл за смяна на парола." });
         return;
       }
+
+      db.resetTokens.push({ token, email, createdAt: Date.now() });
+      await writeDb(db);
     }
 
     send(res, 200, { message: "Ако имейлът съществува, изпратихме линк за смяна на парола." });
@@ -588,6 +642,9 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
+  const emailStatus = getEmailStatus();
   console.log(`Teamio server слуша на ${BASE_URL} (bind: ${HOST}:${PORT})`);
-  console.log(`[Teamio] Имейл статус: ${isEmailConfigured() ? "конфигуриран (Resend)" : "ЛИПСВА конфигурация"}`);
+  console.log(
+    `[Teamio] Имейл статус: ${emailStatus.configured ? `конфигуриран (${emailStatus.provider})` : `грешка (${emailStatus.reason})`}`
+  );
 });
