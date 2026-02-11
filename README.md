@@ -68,6 +68,45 @@ Check current email configuration status:
 curl http://localhost:8787/api/health/email
 ```
 
+
+### Production/PM2 configuration (real email provider)
+Use a real provider with `.env` so verification/reset/login flows work end-to-end.
+
+1) Create env file:
+```bash
+cd server
+cp .env.example .env
+```
+
+2) Edit `.env` and set real values:
+- `BASE_URL` (public URL of your app/server)
+- `EMAIL_PROVIDER` (`resend` or `brevo`)
+- `EMAIL_FROM`
+- provider key (`RESEND_API_KEY` or `BREVO_API_KEY`)
+
+3) Start with PM2:
+```bash
+cd server
+pm2 start ecosystem.config.cjs
+pm2 save
+```
+
+4) Validate config:
+```bash
+curl -s http://127.0.0.1:8787/api/health/email
+```
+Expected: `"configured": true` and at least one provider in `availableProviders`.
+Also verify `"baseUrl"` is your public domain/IP (not `localhost`).
+
+If you change `.env`, reload PM2:
+```bash
+cd server
+pm2 restart teamio-api --update-env
+```
+
+If `baseUrl` is `localhost` in production, set `BASE_URL` in `server/.env` to your public URL (example `https://teamio.your-domain.com`).
+
+
 By default the web app still works in local demo mode.
 To connect the UI to the API server, open browser console and set:
 
