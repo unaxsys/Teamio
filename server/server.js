@@ -131,7 +131,7 @@ const sendEmail = async (payload) => {
     if (payload.text) {
       console.log(`[Teamio] Имейл съдържание (text): ${payload.text}`);
     }
-    return;
+    return { delivered: false, mode: "fallback", reason: status.reason };
   }
 
   const providersInOrder = [EMAIL_PROVIDER, ...status.availableProviders].filter(
@@ -143,11 +143,11 @@ const sendEmail = async (payload) => {
     try {
       if (provider === "brevo" && BREVO_API_KEY) {
         await sendWithBrevo(payload);
-        return;
+        return { delivered: true, mode: "provider", provider: "brevo" };
       }
       if (provider === "resend" && RESEND_API_KEY) {
         await sendWithResend(payload);
-        return;
+        return { delivered: true, mode: "provider", provider: "resend" };
       }
     } catch (error) {
       lastError = error;
@@ -360,8 +360,9 @@ const server = createServer(async (req, res) => {
 
     const verificationLink = `${BASE_URL}/?verify=${verifyToken}`;
 
+    let verificationEmailResult;
     try {
-      await sendEmail({
+      verificationEmailResult = await sendEmail({
         to: email,
         subject: "Потвърди имейла си в Teamio",
         text: `Здравей, ${name}! Потвърди имейла си от тук: ${verificationLink}`,
@@ -378,6 +379,15 @@ const server = createServer(async (req, res) => {
 
     db.users.push(newUser);
     await writeDb(db);
+
+    if (verificationEmailResult?.mode === "fallback") {
+      console.log(`[Teamio] Verification линк за ${email}: ${verificationLink}`);
+      send(res, 201, {
+        message: "Имейл услугата не е конфигурирана. Използвай verificationLink от отговора.",
+        verificationLink,
+      });
+      return;
+    }
 
     send(res, 201, { message: "Пратихме линк за потвърждение на имейла." });
     return;
@@ -458,8 +468,9 @@ const server = createServer(async (req, res) => {
       const token = randomBytes(16).toString("hex");
       const resetLink = `${BASE_URL}/?reset=${token}`;
 
+      let resetEmailResult;
       try {
-        await sendEmail({
+        resetEmailResult = await sendEmail({
           to: email,
           subject: "Смяна на парола в Teamio",
           text: `Здравей! Смени паролата си от тук: ${resetLink}`,
@@ -476,6 +487,15 @@ const server = createServer(async (req, res) => {
 
       db.resetTokens.push({ token, email, createdAt: Date.now() });
       await writeDb(db);
+
+      if (resetEmailResult?.mode === "fallback") {
+        console.log(`[Teamio] Reset линк за ${email}: ${resetLink}`);
+        send(res, 200, {
+          message: "Имейл услугата не е конфигурирана. Използвай resetLink от отговора.",
+          resetLink,
+        });
+        return;
+      }
     }
 
     send(res, 200, { message: "Ако имейлът съществува, изпратихме линк за смяна на парола." });
