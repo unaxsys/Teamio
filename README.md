@@ -32,6 +32,19 @@ cd server
 BASE_URL="https://your-domain.com" npm start
 ```
 
+### Real email delivery (verification + reset)
+Teamio server can send real emails via Resend API. Set:
+
+```bash
+cd server
+RESEND_API_KEY="re_..." \
+EMAIL_FROM="Teamio <noreply@your-domain.com>" \
+BASE_URL="https://your-domain.com" \
+npm start
+```
+
+Without `RESEND_API_KEY` and `EMAIL_FROM`, auth flows that send email will return an error.
+
 By default the web app still works in local demo mode.
 To connect the UI to the API server, open browser console and set:
 

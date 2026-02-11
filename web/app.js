@@ -629,6 +629,18 @@ const setVerificationHelp = (token, email) => {
   verificationHelp.innerHTML = `Не получи имейл за потвърждение за ${safeEmail}? Използвай този линк: <a href="${verifyLink}">Потвърди имейла</a>`;
 };
 
+const setVerificationHelpWithLink = (verificationLink, email) => {
+  if (!verificationHelp) {
+    return;
+  }
+  if (!verificationLink) {
+    verificationHelp.innerHTML = "";
+    return;
+  }
+  const safeEmail = email ? `<strong>${email}</strong>` : "посочения имейл";
+  verificationHelp.innerHTML = `Не получи имейл за потвърждение за ${safeEmail}? Използвай този линк: <a href="${verificationLink}">Потвърди имейла</a>`;
+};
+
 const setCurrentUser = (user) => {
   localStorage.setItem("teamio-current-user", JSON.stringify(user));
 };
@@ -685,46 +697,12 @@ const handleLogin = async (email, password) => {
   if (apiResult?.ok && apiResult.data?.user) {
     setCurrentUser(apiResult.data.user);
     setAuthMessage("");
+    setVerificationHelp();
     await showApp(apiResult.data.user);
     return;
   }
 
-  const users = loadUsers();
-  if (users.length === 0) {
-    setAuthMessage("Нямаш акаунт. Регистрирай се, за да влезеш.");
-    loginForm.classList.remove("auth-form--active");
-    registerForm.classList.add("auth-form--active");
-    authToggleButtons.forEach((btn) =>
-      btn.classList.toggle("auth-toggle__button--active", btn.dataset.auth === "register")
-    );
-    return;
-  }
-
-  const hashed = await hashPassword(normalizedPassword);
-  const user = users.find(
-    (item) => normalizeEmail(item.email) === normalizedEmail && (item.password === hashed || item.password === normalizedPassword)
-  );
-
-  if (!user) {
-    setAuthMessage(apiResult?.data?.message ?? "Невалидни данни. Провери имейла и паролата.");
-    return;
-  }
-
-  if (user.isEmailVerified === false) {
-    const activeToken = getOrCreateVerificationToken(user);
-    setAuthMessage("Потвърди имейла си преди вход.");
-    setVerificationHelp(activeToken, user.email);
-    return;
-  }
-
-  if (user.password === normalizedPassword) {
-    user.password = hashed;
-    saveUsers(users);
-  }
-
-  setCurrentUser(user);
-  setAuthMessage("");
-  await showApp(user);
+  setAuthMessage(apiResult?.data?.message ?? "Невалидни данни. Провери имейла и паролата.");
 };
 
 const handleRegister = async (name, email, password, companyName) => {
@@ -756,9 +734,9 @@ const handleRegister = async (name, email, password, companyName) => {
   });
 
   if (apiResult?.ok) {
-    setAuthMessage("Регистрацията е успешна. Провери имейла си и потвърди акаунта преди вход.");
-    setVerificationHelp();
     activateAuthForm("login");
+    setAuthMessage("Регистрацията е успешна. Провери имейла си и потвърди акаунта преди вход.");
+    setVerificationHelpWithLink(apiResult.data?.verificationLink, normalizedEmail);
     return;
   }
 
@@ -789,22 +767,7 @@ const requestPasswordReset = async (email) => {
     body: JSON.stringify({ email: normalizedEmail }),
   });
 
-  if (apiResult?.ok) {
-    resetLinkEl.textContent = "Ако имейлът съществува, изпратихме линк за смяна на парола.";
-    return;
-  }
-
-  const users = loadUsers();
-  const user = users.find((item) => normalizeEmail(item.email) === normalizedEmail);
-  if (!user) {
-    resetLinkEl.textContent = "Ако имейлът съществува, изпратихме линк за смяна на парола.";
-    return;
-  }
-  const tokens = loadResetTokens();
-  const token = generateToken();
-  tokens.push({ token, email: normalizedEmail, createdAt: Date.now() });
-  saveResetTokens(tokens);
-  resetLinkEl.textContent = "Линкът за смяна е генериран в демо режим (без реално изпращане на имейл).";
+  resetLinkEl.textContent = apiResult?.data?.message ?? "Ако имейлът съществува, изпратихме линк за смяна на парола.";
 };
 
 const clearSensitiveQueryParams = () => {
@@ -838,26 +801,7 @@ const openVerifyFromUrl = async () => {
     return;
   }
 
-  const verificationTokens = loadVerificationTokens();
-  const tokenRecord = verificationTokens.find((item) => item.token === token);
-
-  if (!tokenRecord || tokenRecord.usedAt || tokenRecord.expiresAt < Date.now()) {
-    setAuthMessage(apiResult?.data?.message ?? "Линкът за потвърждение е невалиден или изтекъл.");
-    return;
-  }
-
-  const users = loadUsers();
-  const updatedUsers = users.map((user) =>
-    user.id === tokenRecord.userId || normalizeEmail(user.email) === normalizeEmail(tokenRecord.email)
-      ? { ...user, isEmailVerified: true }
-      : user
-  );
-  saveUsers(updatedUsers);
-  const updatedTokens = verificationTokens.map((item) =>
-    item.token === token ? { ...item, usedAt: Date.now() } : item
-  );
-  saveVerificationTokens(updatedTokens);
-  setAuthMessage("Имейлът е потвърден. Влез в профила си.");
+  setAuthMessage(apiResult?.data?.message ?? "Линкът за потвърждение е невалиден или изтекъл.");
   setVerificationHelp();
 };
 
@@ -2061,25 +2005,7 @@ newPasswordForm.addEventListener("submit", async (event) => {
     return;
   }
 
-  const tokens = loadResetTokens();
-  const tokenRecord = tokens.find((item) => item.token === token);
-  if (!tokenRecord) {
-    setAuthMessage(apiResult?.data?.message ?? "Линкът за възстановяване е невалиден.");
-    return;
-  }
-  const users = loadUsers();
-  const updatedUsers = await Promise.all(
-    users.map(async (user) => {
-      if (normalizeEmail(user.email) !== normalizeEmail(tokenRecord.email)) {
-        return user;
-      }
-      return { ...user, password: await hashPassword(newPassword) };
-    })
-  );
-  saveUsers(updatedUsers);
-  saveResetTokens(tokens.filter((item) => item.token !== token));
-  closeModal(newPasswordModal);
-  setAuthMessage("Паролата е обновена. Можеш да влезеш.");
+  setAuthMessage(apiResult?.data?.message ?? "Линкът за възстановяване е невалиден.");
 });
 
 closeNewPasswordButton.addEventListener("click", () => {
