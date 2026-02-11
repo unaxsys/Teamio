@@ -33,6 +33,38 @@ const hashPassword = (password) => createHash("sha256").update(password).digest(
 const normalizeEmail = (email = "") => email.trim().toLowerCase();
 const normalizeText = (value = "") => value.trim();
 
+
+const RESEND_API_KEY = normalizeText(process.env.RESEND_API_KEY || "");
+const EMAIL_FROM = normalizeText(process.env.EMAIL_FROM || "");
+
+const isEmailConfigured = () => Boolean(RESEND_API_KEY && EMAIL_FROM);
+
+const sendEmail = async ({ to, subject, html, text }) => {
+  if (!isEmailConfigured()) {
+    throw new Error("Имейл услугата не е конфигурирана на сървъра.");
+  }
+
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${RESEND_API_KEY}`,
+    },
+    body: JSON.stringify({
+      from: EMAIL_FROM,
+      to: [to],
+      subject,
+      html,
+      text,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Resend API error: ${response.status} ${errorText}`);
+  }
+};
+
 const readDb = async () => {
   try {
     return JSON.parse(await readFile(DB_PATH, "utf8"));
@@ -231,9 +263,23 @@ const server = createServer(async (req, res) => {
     await writeDb(db);
 
     const verificationLink = `${BASE_URL}/?verify=${verifyToken}`;
-    console.log(`[Teamio] Verification линк за ${email}: ${verificationLink}`);
 
-    send(res, 201, { message: "Пратихме линк за потвърждение на имейла.", verificationLink });
+    try {
+      await sendEmail({
+        to: email,
+        subject: "Потвърди имейла си в Teamio",
+        text: `Здравей, ${name}! Потвърди имейла си от тук: ${verificationLink}`,
+        html: `<p>Здравей, <strong>${name}</strong>!</p><p>Потвърди имейла си от този линк:</p><p><a href="${verificationLink}">${verificationLink}</a></p>`,
+      });
+    } catch (error) {
+      console.error("[Teamio] Грешка при изпращане на verification имейл:", error);
+      send(res, 500, {
+        message: "Не успяхме да изпратим имейл за потвърждение. Свържи се с администратор.",
+      });
+      return;
+    }
+
+    send(res, 201, { message: "Пратихме линк за потвърждение на имейла." });
     return;
   }
 
@@ -312,7 +358,20 @@ const server = createServer(async (req, res) => {
       const token = randomBytes(16).toString("hex");
       db.resetTokens.push({ token, email, createdAt: Date.now() });
       await writeDb(db);
-      console.log(`[Teamio] Reset линк за ${email}: ${BASE_URL}/?reset=${token}`);
+      const resetLink = `${BASE_URL}/?reset=${token}`;
+
+      try {
+        await sendEmail({
+          to: email,
+          subject: "Смяна на парола в Teamio",
+          text: `Здравей! Смени паролата си от тук: ${resetLink}`,
+          html: `<p>Здравей!</p><p>Смени паролата си от този линк:</p><p><a href="${resetLink}">${resetLink}</a></p>`,
+        });
+      } catch (error) {
+        console.error("[Teamio] Грешка при изпращане на reset имейл:", error);
+        send(res, 500, { message: "Не успяхме да изпратим имейл за смяна на парола." });
+        return;
+      }
     }
 
     send(res, 200, { message: "Ако имейлът съществува, изпратихме линк за смяна на парола." });
@@ -530,4 +589,5 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`Teamio server слуша на ${BASE_URL} (bind: ${HOST}:${PORT})`);
+  console.log(`[Teamio] Имейл статус: ${isEmailConfigured() ? "конфигуриран (Resend)" : "ЛИПСВА конфигурация"}`);
 });
