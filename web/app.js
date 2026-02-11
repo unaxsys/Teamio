@@ -4,6 +4,7 @@ const authScreenEl = document.getElementById("auth-screen");
 const loginForm = document.getElementById("login-form");
 const registerForm = document.getElementById("register-form");
 const authMessage = document.getElementById("auth-message");
+const verificationHelp = document.getElementById("verification-help");
 const authToggleButtons = document.querySelectorAll(".auth-toggle__button");
 const profileName = document.getElementById("profile-name");
 const profileAvatar = document.getElementById("profile-avatar");
@@ -511,8 +512,59 @@ const saveVerificationTokens = (tokens) => {
 
 const loadVerificationTokens = () => JSON.parse(localStorage.getItem("teamio-verification-tokens") ?? "[]");
 
+const getOrCreateVerificationToken = (user) => {
+  if (!user?.id && !user?.email) {
+    return null;
+  }
+
+  const now = Date.now();
+  const verificationTokens = loadVerificationTokens();
+  const activeToken = verificationTokens
+    .filter(
+      (item) =>
+        !item.usedAt &&
+        item.expiresAt > now &&
+        (item.userId === user.id || normalizeEmail(item.email) === normalizeEmail(user.email))
+    )
+    .sort((a, b) => b.expiresAt - a.expiresAt)[0];
+
+  if (activeToken) {
+    return activeToken.token;
+  }
+
+  const token = generateToken();
+  verificationTokens.push({
+    token,
+    userId: user.id,
+    email: normalizeEmail(user.email),
+    expiresAt: now + 24 * 60 * 60 * 1000,
+    usedAt: null,
+  });
+  saveVerificationTokens(verificationTokens);
+  return token;
+};
+
 const setAuthMessage = (message) => {
   authMessage.textContent = message;
+};
+
+const buildVerificationLink = (token) => {
+  const url = new URL(window.location.href);
+  url.searchParams.set("verify", token);
+  return url.toString();
+};
+
+const setVerificationHelp = (token, email) => {
+  if (!verificationHelp) {
+    return;
+  }
+  if (!token) {
+    verificationHelp.innerHTML = "";
+    return;
+  }
+  const verifyLink = buildVerificationLink(token);
+  const safeEmail = email ? `<strong>${email}</strong>` : "посочения имейл";
+  verificationHelp.innerHTML = `Не получи имейл за потвърждение за ${safeEmail}? Използвай този линк: <a href="${verifyLink}">Потвърди имейла</a>`;
 };
 
 const setCurrentUser = (user) => {
@@ -594,7 +646,9 @@ const handleLogin = async (email, password) => {
   }
 
   if (user.isEmailVerified === false) {
+    const activeToken = getOrCreateVerificationToken(user);
     setAuthMessage("Потвърди имейла си преди вход.");
+    setVerificationHelp(activeToken, user.email);
     return;
   }
 
@@ -631,6 +685,7 @@ const handleRegister = async (name, email, password, companyName) => {
 
   if (apiResult?.ok) {
     setAuthMessage("Регистрацията е успешна. Провери имейла си и потвърди акаунта преди вход.");
+    setVerificationHelp();
     activateAuthForm("login");
     return;
   }
@@ -675,6 +730,7 @@ const handleRegister = async (name, email, password, companyName) => {
   saveVerificationTokens(verificationTokens);
   setAuthMessage("Регистрацията е успешна. Потвърди имейла си, за да влезеш.");
   activateAuthForm("login");
+  setVerificationHelp(verificationToken, normalizedEmail);
 };
 
 const openModal = (modal) => {
@@ -745,6 +801,7 @@ const openVerifyFromUrl = async () => {
 
   if (apiResult?.ok) {
     setAuthMessage("Имейлът е потвърден. Влез в профила си.");
+    setVerificationHelp();
     return;
   }
 
@@ -768,6 +825,7 @@ const openVerifyFromUrl = async () => {
   );
   saveVerificationTokens(updatedTokens);
   setAuthMessage("Имейлът е потвърден. Влез в профила си.");
+  setVerificationHelp();
 };
 
 const openResetFromUrl = () => {
@@ -1461,6 +1519,7 @@ const activateAuthForm = (target) => {
   loginForm.classList.toggle("auth-form--active", target === "login");
   registerForm.classList.toggle("auth-form--active", target === "register");
   setAuthMessage("");
+  setVerificationHelp();
 };
 
 authToggleButtons.forEach((button) => {

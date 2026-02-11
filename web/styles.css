@@ -250,6 +250,23 @@ body {
   color: var(--primary-dark);
 }
 
+.verification-help {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.verification-help:empty {
+  display: none;
+}
+
+.verification-help a {
+  color: var(--primary-dark);
+  font-weight: 600;
+}
+
 .link-button {
   border: none;
   background: none;
