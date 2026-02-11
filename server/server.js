@@ -125,7 +125,13 @@ const sendWithResend = async ({ to, subject, html, text }) => {
 const sendEmail = async (payload) => {
   const status = getEmailStatus();
   if (!status.configured) {
-    throw new Error(status.reason);
+    console.log(
+      `[Teamio] Имейл fallback (console mode): до=${payload.to}; причина=${status.reason}; тема=${payload.subject}`
+    );
+    if (payload.text) {
+      console.log(`[Teamio] Имейл съдържание (text): ${payload.text}`);
+    }
+    return;
   }
 
   const providersInOrder = [EMAIL_PROVIDER, ...status.availableProviders].filter(
