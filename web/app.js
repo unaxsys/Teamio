@@ -44,6 +44,10 @@ const myInviteList = document.getElementById("my-invite-list");
 const inviteShareBox = document.getElementById("invite-share");
 const inviteShareLink = document.getElementById("invite-share-link");
 const inviteCopyLinkButton = document.getElementById("invite-copy-link");
+const inviteShareNativeButton = document.getElementById("invite-share-native");
+const inviteShareWhatsappLink = document.getElementById("invite-share-whatsapp");
+const inviteShareFacebookLink = document.getElementById("invite-share-facebook");
+const inviteShareTelegramLink = document.getElementById("invite-share-telegram");
 const acceptedMembersList = document.getElementById("accepted-members-list");
 const membersInvitesBadge = document.getElementById("members-invites-badge");
 const pendingInvitesCount = document.getElementById("pending-invites-count");
@@ -829,12 +833,13 @@ const syncInvitesFromApi = async () => {
   const myInvitesParams = new URLSearchParams();
   if (user.id) {
     myInvitesParams.set("userId", user.id);
-  } else if (user.email) {
+  }
+  if (user.email) {
     myInvitesParams.set("email", normalizeEmail(user.email));
   }
 
   if (myInvitesParams.toString()) {
-    const myInvitesResult = await apiRequest(`/api/invites?${myInvitesParams.toString()}`);
+    const myInvitesResult = await apiRequest(`/api/invites/inbox?${myInvitesParams.toString()}`);
     if (myInvitesResult?.ok && Array.isArray(myInvitesResult.data?.invites)) {
       myInvitesResult.data.invites.forEach((invite) => {
         if (invite?.id) {
@@ -3024,6 +3029,8 @@ inviteForm?.addEventListener("submit", async (event) => {
   }
   const formData = new FormData(inviteForm);
   const email = normalizeEmail(formData.get("email")?.toString() ?? "");
+  const invitedUserId = normalizeText(formData.get("invitedUserId")?.toString() ?? "");
+  const inviteTargetLabel = invitedUserId || email;
   const role = normalizeRole(formData.get("role")?.toString() ?? "Member");
   if (!canInviteRole(role)) {
     setAuthMessage("Можеш да каниш само с роля по-ниска от твоята.");
@@ -3035,7 +3042,7 @@ inviteForm?.addEventListener("submit", async (event) => {
   const validWorkspaceIds = new Set((account?.workspaces ?? []).map((entry) => entry.id));
   const workspaceId = selectedWorkspaceId && validWorkspaceIds.has(selectedWorkspaceId) ? selectedWorkspaceId : "";
   const currentBoard = loadBoards().find((board) => board.id === getCurrentBoardId()) ?? null;
-  if (!account || !email) {
+  if (!account || (!email && !invitedUserId)) {
     return;
   }
 
@@ -3044,7 +3051,7 @@ inviteForm?.addEventListener("submit", async (event) => {
     id: `invite-${Date.now()}`,
     accountId: account.id,
     invitedByUserId: loadCurrentUser()?.id ?? null,
-    email,
+    email: email || "",
     role,
     token: localToken,
     expiresAt: Date.now() + 48 * 60 * 60 * 1000,
@@ -3056,7 +3063,8 @@ inviteForm?.addEventListener("submit", async (event) => {
   const payload = {
     accountId: account.id,
     invitedByUserId: loadCurrentUser()?.id ?? null,
-    email,
+    ...(email ? { email } : {}),
+    ...(invitedUserId ? { invitedUserId } : {}),
     role,
     ...(workspaceId ? { workspaceId } : {}),
     boardId: currentBoard?.id ?? null,
@@ -3091,6 +3099,15 @@ inviteForm?.addEventListener("submit", async (event) => {
     if (!isInternalInvite) {
       inviteShareLink.href = inviteLink;
       inviteShareLink.textContent = inviteLink;
+      if (inviteShareWhatsappLink) {
+        inviteShareWhatsappLink.href = `https://wa.me/?text=${encodeURIComponent(inviteLink)}`;
+      }
+      if (inviteShareFacebookLink) {
+        inviteShareFacebookLink.href = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(inviteLink)}`;
+      }
+      if (inviteShareTelegramLink) {
+        inviteShareTelegramLink.href = `https://t.me/share/url?url=${encodeURIComponent(inviteLink)}`;
+      }
     }
   }
 
@@ -3098,9 +3115,9 @@ inviteForm?.addEventListener("submit", async (event) => {
     type: "board_invite",
     accountId: account.id,
     boardId: getCurrentBoardId(),
-    email,
+    email: email || invite.email,
     role,
-    message: `Изпратена е покана към ${email}`,
+    message: `Изпратена е покана към ${inviteTargetLabel || invite.email}`,
   });
   if (invite.delivery === "internal") {
     setAuthMessage("Поканата е изпратена вътрешно към регистрирания потребител.");
@@ -3126,6 +3143,27 @@ inviteCopyLinkButton?.addEventListener("click", async () => {
     setAuthMessage("Линкът за поканата е копиран.");
   } catch (error) {
     setAuthMessage("Неуспешно копиране. Копирай линка ръчно.");
+  }
+});
+
+inviteShareNativeButton?.addEventListener("click", async () => {
+  const link = inviteShareLink?.href;
+  if (!link || !navigator.share) {
+    setAuthMessage("Споделянето не е налично в този браузър.");
+    return;
+  }
+
+  try {
+    await navigator.share({
+      title: "Покана за Teamio",
+      text: "Присъедини се към работното поле в Teamio:",
+      url: link,
+    });
+    setAuthMessage("Линкът е споделен успешно.");
+  } catch (error) {
+    if (error?.name !== "AbortError") {
+      setAuthMessage("Неуспешно споделяне. Използвай бутон Копирай.");
+    }
   }
 });
 
