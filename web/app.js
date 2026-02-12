@@ -824,7 +824,12 @@ const syncInvitesFromApi = async () => {
     return;
   }
 
-  const mergedInvites = new Map();
+  const existingInvites = loadInvites();
+  const existingIncomingInvites = existingInvites.filter((invite) => invite?.__scope === "incoming");
+  const existingAccountInvites = existingInvites.filter((invite) => invite?.__scope === "account");
+
+  let incomingInvites = existingIncomingInvites;
+  let accountInvites = existingAccountInvites;
 
   const myInvitesParams = new URLSearchParams();
   if (user.id) {
@@ -837,11 +842,9 @@ const syncInvitesFromApi = async () => {
   if (myInvitesParams.toString()) {
     const myInvitesResult = await apiRequest(`/api/invites/inbox?${myInvitesParams.toString()}`);
     if (myInvitesResult?.ok && Array.isArray(myInvitesResult.data?.invites)) {
-      myInvitesResult.data.invites.forEach((invite) => {
-        if (invite?.id) {
-          mergedInvites.set(invite.id, invite);
-        }
-      });
+      incomingInvites = myInvitesResult.data.invites
+        .filter((invite) => invite?.id)
+        .map((invite) => ({ ...invite, __scope: "incoming" }));
     }
   }
 
@@ -852,13 +855,20 @@ const syncInvitesFromApi = async () => {
 
     const accountResult = await apiRequest(`/api/invites?${accountParams.toString()}`);
     if (accountResult?.ok && Array.isArray(accountResult.data?.invites)) {
-      accountResult.data.invites.forEach((invite) => {
-        if (invite?.id) {
-          mergedInvites.set(invite.id, invite);
-        }
-      });
+      accountInvites = accountResult.data.invites
+        .filter((invite) => invite?.id)
+        .map((invite) => ({ ...invite, __scope: "account" }));
     }
+  } else {
+    accountInvites = [];
   }
+
+  const mergedInvites = new Map();
+  [...accountInvites, ...incomingInvites].forEach((invite) => {
+    if (invite?.id) {
+      mergedInvites.set(invite.id, invite);
+    }
+  });
 
   saveInvites(Array.from(mergedInvites.values()));
 };
@@ -1789,7 +1799,11 @@ const renderMyInvites = () => {
     return;
   }
 
-  const invites = loadInvites().filter((invite) => normalizeEmail(invite.email) === normalizeEmail(currentUser.email) || invite.invitedUserId === currentUser.id);
+  const invites = loadInvites().filter((invite) => {
+    if (!invite) return false;
+    if (invite.__scope === "account") return false;
+    return normalizeEmail(invite.email) === normalizeEmail(currentUser.email) || invite.invitedUserId === currentUser.id;
+  });
   myInviteList.innerHTML = "";
 
   if (invites.length === 0) {
