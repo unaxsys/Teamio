@@ -903,8 +903,8 @@ const handleRegister = async (name, email, password) => {
 
   if (apiResult?.ok) {
     activateAuthForm("login");
-    setAuthMessage("Регистрацията е успешна. Провери имейла си и потвърди акаунта преди вход.");
-    setVerificationHelpWithLink(apiResult.data?.verificationLink, normalizedEmail);
+    setAuthMessage("Регистрацията е успешна. Можеш да влезеш веднага.");
+    setVerificationHelp();
     return;
   }
 
@@ -934,6 +934,11 @@ const requestPasswordReset = async (email) => {
     method: "POST",
     body: JSON.stringify({ email: normalizedEmail }),
   });
+
+  if (apiResult?.ok && apiResult.data?.resetLink) {
+    window.location.href = apiResult.data.resetLink;
+    return;
+  }
 
   resetLinkEl.textContent = apiResult?.data?.message ?? "Ако имейлът съществува, изпратихме линк за смяна на парола.";
 };
