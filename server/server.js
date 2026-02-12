@@ -707,22 +707,25 @@ const server = createServer(async (req, res) => {
     const requesterUserId = normalizeText(requestUrl.searchParams.get("requesterUserId") ?? "");
 
     const db = ensureDbShape(await readDb());
+    let canReadAccountInvites = false;
 
     if (accountId && requesterUserId) {
       const account = db.accounts.find((item) => item.id === accountId);
-      if (!account) {
+      if (!account && !email) {
         send(res, 404, { message: "Фирмата не е намерена." });
         return;
       }
 
-      if (!canManageMembers(db, account, requesterUserId)) {
+      if (account && canManageMembers(db, account, requesterUserId)) {
+        canReadAccountInvites = true;
+      } else if (!email) {
         send(res, 403, { message: "Forbidden" });
         return;
       }
     }
 
     const invites = db.invites.filter((invite) => {
-      const byAccount = accountId ? invite.accountId === accountId : false;
+      const byAccount = canReadAccountInvites ? invite.accountId === accountId : false;
       const byEmail = email ? normalizeEmail(invite.email) === email : false;
       return byAccount || byEmail;
     });
