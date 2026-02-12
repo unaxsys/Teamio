@@ -54,6 +54,10 @@ const teamCreateModal = document.getElementById("team-create-modal");
 const memberCreateModal = document.getElementById("member-create-modal");
 const closeTeamCreateModalButton = document.getElementById("close-team-create-modal");
 const closeMemberCreateModalButton = document.getElementById("close-member-create-modal");
+const listLimitModal = document.getElementById("list-limit-modal");
+const listLimitForm = document.getElementById("list-limit-form");
+const closeListLimitModalButton = document.getElementById("close-list-limit-modal");
+const removeListLimitButton = document.getElementById("remove-list-limit");
 const calendarForm = document.getElementById("calendar-form");
 const calendarList = document.getElementById("calendar-list");
 const calendarGrid = document.getElementById("calendar-grid");
@@ -381,14 +385,23 @@ const saveAllColumns = (columns) => {
 };
 
 const createDefaultColumnsForBoard = (boardId) =>
-  defaultColumns.map((column) => ({ ...column, id: `${column.id}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`, boardId }));
+  defaultColumns.map((column) => ({ ...column, id: `${column.id}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`, boardId, wipLimit: null }));
+
+const normalizeColumn = (column, currentBoardId) => {
+  const parsedLimit = Number.parseInt(column.wipLimit, 10);
+  return {
+    ...column,
+    boardId: column.boardId ?? currentBoardId,
+    wipLimit: Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : null,
+  };
+};
 
 const loadColumns = () => {
   const currentBoardId = getCurrentBoardId();
   const allColumns = loadAllColumns();
   const boardColumns = allColumns.filter((column) => column.boardId === currentBoardId || !column.boardId);
   if (boardColumns.length > 0) {
-    const normalized = boardColumns.map((column) => ({ ...column, boardId: currentBoardId }));
+    const normalized = boardColumns.map((column) => normalizeColumn(column, currentBoardId));
     const otherColumns = allColumns.filter((column) => column.boardId && column.boardId !== currentBoardId);
     saveAllColumns([...otherColumns, ...normalized]);
     return normalized;
@@ -401,7 +414,7 @@ const loadColumns = () => {
 const saveColumns = (columns) => {
   const currentBoardId = getCurrentBoardId();
   const allColumns = loadAllColumns().filter((column) => column.boardId !== currentBoardId);
-  saveAllColumns([...allColumns, ...columns.map((column) => ({ ...column, boardId: currentBoardId }))]);
+  saveAllColumns([...allColumns, ...columns.map((column) => normalizeColumn(column, currentBoardId))]);
 };
 
 const loadUsers = () => JSON.parse(localStorage.getItem("teamio-users") ?? "[]");
@@ -1168,7 +1181,12 @@ const renderBoard = (tasks) => {
     const columnTasks = filteredTasks
       .filter((task) => task.column === column.id)
       .sort((a, b) => (levelOrder[a.level ?? "L2"] ?? 2) - (levelOrder[b.level ?? "L2"] ?? 2));
-    count.textContent = `${columnTasks.length} задачи`;
+    const hasLimit = Number.isInteger(column.wipLimit) && column.wipLimit > 0;
+    const isOverLimit = hasLimit && columnTasks.length > column.wipLimit;
+    count.textContent = hasLimit ? `${columnTasks.length}/${column.wipLimit}` : `${columnTasks.length} задачи`;
+    count.classList.toggle("column__count--limit", hasLimit);
+    count.classList.toggle("column__count--over", isOverLimit);
+    columnEl.classList.toggle("column--limit-over", isOverLimit);
 
     const actions = document.createElement("div");
     actions.className = "column__actions";
@@ -1200,7 +1218,21 @@ const renderBoard = (tasks) => {
       renderBoard(getVisibleTasks());
     });
 
-    actions.append(count, dragButton, renameButton);
+    const limitButton = document.createElement("button");
+    limitButton.type = "button";
+    limitButton.className = "column__limit";
+    limitButton.textContent = hasLimit ? "Промени лимит" : "WIP лимит";
+    limitButton.title = "Максимален брой карти в колоната";
+    limitButton.addEventListener("click", () => {
+      if (!listLimitForm || !listLimitModal) {
+        return;
+      }
+      listLimitForm.querySelector('input[name="columnId"]').value = column.id;
+      listLimitForm.querySelector('input[name="wipLimit"]').value = hasLimit ? column.wipLimit.toString() : "";
+      openModal(listLimitModal);
+    });
+
+    actions.append(count, dragButton, renameButton, limitButton);
     header.append(titleWrap, actions);
     columnEl.append(header);
 
@@ -1247,7 +1279,7 @@ const renderBoard = (tasks) => {
         return;
       }
       const allTasks = loadTasks();
-      const updated = allTasks.map((task) => (task.id === taskId ? { ...task, column: column.id } : task));
+      const updated = allTasks.map((task) => (task.id === taskId ? { ...task, column: column.id, listId: column.id } : task));
       saveTasks(updated);
       renderBoard(getVisibleTasks());
       renderCalendar();
@@ -1827,6 +1859,7 @@ newColumnButton.addEventListener("click", () => {
     id: `column-${Date.now()}`,
     title: name.trim(),
     color: nextColor,
+    wipLimit: null,
   };
   const updated = [...columns, newColumn];
   saveColumns(updated);
@@ -1890,6 +1923,51 @@ closeTeamCreateModalButton?.addEventListener("click", () => {
 closeMemberCreateModalButton?.addEventListener("click", () => {
   closeModal(memberCreateModal);
 });
+
+
+closeListLimitModalButton?.addEventListener("click", () => {
+  closeModal(listLimitModal);
+});
+
+removeListLimitButton?.addEventListener("click", () => {
+  if (!listLimitForm) {
+    return;
+  }
+  const columnId = listLimitForm.querySelector('input[name="columnId"]')?.value;
+  if (!columnId) {
+    closeModal(listLimitModal);
+    return;
+  }
+  const columns = loadColumns();
+  const updated = columns.map((column) => (column.id === columnId ? { ...column, wipLimit: null } : column));
+  saveColumns(updated);
+  closeModal(listLimitModal);
+  renderBoard(getVisibleTasks());
+});
+
+listLimitForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const formData = new FormData(listLimitForm);
+  const columnId = formData.get("columnId")?.toString();
+  const rawLimit = formData.get("wipLimit")?.toString().trim() ?? "";
+  if (!columnId) {
+    return;
+  }
+  const parsedLimit = Number.parseInt(rawLimit, 10);
+  const nextLimit = Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : null;
+  const columns = loadColumns();
+  const updated = columns.map((column) => (column.id === columnId ? { ...column, wipLimit: nextLimit } : column));
+  saveColumns(updated);
+  closeModal(listLimitModal);
+  renderBoard(getVisibleTasks());
+});
+
+listLimitModal?.addEventListener("click", (event) => {
+  if (event.target === listLimitModal) {
+    closeModal(listLimitModal);
+  }
+});
+
 
 teamCreateModal?.addEventListener("click", (event) => {
   if (event.target === teamCreateModal) {

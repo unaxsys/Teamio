@@ -486,6 +486,26 @@
       </div>
     </div>
 
+
+    <div class="modal" id="list-limit-modal">
+      <div class="modal__card modal__card--wide">
+        <h2>Лимит за колона</h2>
+        <form id="list-limit-form">
+          <input type="hidden" name="columnId" />
+          <label>
+            Максимален брой карти
+            <input type="number" name="wipLimit" min="1" step="1" placeholder="напр. 5" />
+          </label>
+          <p class="panel-list__meta">Колоната ще се маркира, ако картите надвишат лимита.</p>
+          <div class="modal__actions">
+            <button type="button" class="ghost" id="close-list-limit-modal">Отказ</button>
+            <button type="button" class="ghost" id="remove-list-limit">Премахни лимита</button>
+            <button type="submit" class="primary">Запази</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <script src="app.js"></script>
   </body>
 </html>
