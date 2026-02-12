@@ -653,7 +653,7 @@ body {
   border: none;
   background: var(--accent-soft);
   color: #b76d1d;
-  padding: 4px 4px;
+  padding: 4px 8px;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 600;
