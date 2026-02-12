@@ -711,6 +711,9 @@ const syncInvitesFromApi = async () => {
   if (user.email) {
     params.set("email", normalizeEmail(user.email));
   }
+  if (user.id) {
+    params.set("userId", user.id);
+  }
 
   if (!params.toString()) {
     return;
@@ -1514,7 +1517,7 @@ const renderMyInvites = () => {
     return;
   }
 
-  const invites = loadInvites().filter((invite) => normalizeEmail(invite.email) === normalizeEmail(currentUser.email));
+  const invites = loadInvites().filter((invite) => normalizeEmail(invite.email) === normalizeEmail(currentUser.email) || invite.invitedUserId === currentUser.id);
   myInviteList.innerHTML = "";
 
   if (invites.length === 0) {
@@ -2842,9 +2845,12 @@ inviteForm?.addEventListener("submit", async (event) => {
 
   const inviteLink = `${window.location.origin}${window.location.pathname}?invite=${invite.token}`;
   if (inviteShareBox && inviteShareLink) {
-    inviteShareBox.hidden = false;
-    inviteShareLink.href = inviteLink;
-    inviteShareLink.textContent = inviteLink;
+    const isInternalInvite = invite.delivery === "internal";
+    inviteShareBox.hidden = isInternalInvite;
+    if (!isInternalInvite) {
+      inviteShareLink.href = inviteLink;
+      inviteShareLink.textContent = inviteLink;
+    }
   }
 
   pushNotification({
@@ -2855,7 +2861,7 @@ inviteForm?.addEventListener("submit", async (event) => {
     role,
     message: `Изпратена е покана към ${email}`,
   });
-  setAuthMessage("Поканата е създадена успешно.");
+  setAuthMessage(invite.delivery === "internal" ? "Поканата е изпратена вътрешно към регистрирания потребител." : "Поканата е създадена успешно.");
   renderInvites();
   renderMyInvites();
   renderMembersInvitesSummary();

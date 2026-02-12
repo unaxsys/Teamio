@@ -744,6 +744,7 @@ const server = createServer(async (req, res) => {
   if (requestUrl.pathname === "/api/invites" && req.method === "GET") {
     const accountId = normalizeText(requestUrl.searchParams.get("accountId") ?? "");
     const email = normalizeEmail(requestUrl.searchParams.get("email") ?? "");
+    const userId = normalizeText(requestUrl.searchParams.get("userId") ?? "");
     const requesterUserId = normalizeText(requestUrl.searchParams.get("requesterUserId") ?? "");
 
     const db = ensureDbShape(await readDb());
@@ -767,7 +768,8 @@ const server = createServer(async (req, res) => {
     const invites = db.invites.filter((invite) => {
       const byAccount = canReadAccountInvites ? invite.accountId === accountId : false;
       const byEmail = email ? normalizeEmail(invite.email) === email : false;
-      return byAccount || byEmail;
+      const byInvitedUser = userId ? invite.invitedUserId === userId : false;
+      return byAccount || byEmail || byInvitedUser;
     });
 
     send(res, 200, { invites });
@@ -798,12 +800,16 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    const existingUser = db.users.find((item) => normalizeEmail(item.email) === email) ?? null;
+
     const invite = {
       id: `invite-${Date.now()}`,
       accountId,
       invitedByUserId: invitedByUserId || null,
+      invitedUserId: existingUser?.id ?? null,
       email,
       role,
+      delivery: existingUser ? "internal" : "email",
       token: randomBytes(16).toString("hex"),
       expiresAt: Date.now() + 48 * 60 * 60 * 1000,
       acceptedAt: null,
@@ -814,7 +820,26 @@ const server = createServer(async (req, res) => {
 
     db.invites.unshift(invite);
     await writeDb(db);
-    send(res, 201, { invite });
+
+    if (!existingUser) {
+      try {
+        const inviteLink = `${getPublicBaseUrl(req)}/?invite=${invite.token}`;
+        await sendEmail({
+          to: email,
+          subject: `Покана за достъп до ${account.name ?? "Teamio"}`,
+          text: `Получаваш покана за Teamio. Отвори линка: ${inviteLink}`,
+          html: `<p>Получаваш покана за Teamio.</p><p><a href="${inviteLink}">${inviteLink}</a></p>`,
+        });
+      } catch (error) {
+        console.error("[Teamio] Грешка при изпращане на invite имейл:", error);
+      }
+    }
+
+    send(res, 201, {
+      invite,
+      delivery: invite.delivery,
+      existingUserId: existingUser?.id ?? null,
+    });
     return;
   }
 
