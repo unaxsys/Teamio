@@ -926,10 +926,16 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    if (workspaceId && !(account.workspaces ?? []).some((workspace) => workspace.id === workspaceId)) {
-      send(res, 400, { message: "Невалидно workspace за поканата." });
-      return;
+    let resolvedWorkspaceId = normalizeText(workspaceId);
+
+    // ако идва грешен workspaceId (пример: от друг акаунт / localStorage), не връщаме грешка,
+    // а fallback-ваме към първото workspace на акаунта
+    if (resolvedWorkspaceId && !(account.workspaces ?? []).some((workspace) => workspace.id === resolvedWorkspaceId)) {
+      resolvedWorkspaceId = (account.workspaces ?? [])[0]?.id ?? null;
     }
+
+    // ако пак няма workspace – оставяме null
+    if (!resolvedWorkspaceId) resolvedWorkspaceId = null;
 
     const existingUserById = invitedUserId ? db.users.find((item) => item.id === invitedUserId) ?? null : null;
     const existingUserByEmail = email ? db.users.find((item) => normalizeEmail(item.email) === email) ?? null : null;
@@ -974,7 +980,7 @@ const server = createServer(async (req, res) => {
       invitedUserId: existingUser?.id ?? null,
       email: targetEmail,
       role,
-      workspaceId: workspaceId || null,
+      workspaceId: resolvedWorkspaceId,
       boardId: boardId || null,
       boardName: boardName || null,
       delivery: existingUser ? "internal" : "email",
@@ -1515,11 +1521,11 @@ const server = createServer(async (req, res) => {
         };
       });
 
-      // Optionally link user's accountId (only if it's empty) - keep your current model intact
+      // IMPORTANT: за текущия модел (1 активен account на потребител),
+      // при accept прехвърляме потребителя към акаунта на поканата
       if (userId) {
         db.users = db.users.map((u) => {
           if (u.id !== userId) return u;
-          if (u.accountId) return u; // do not override
           return { ...u, accountId: invite.accountId };
         });
       }
