@@ -3027,11 +3027,9 @@ inviteForm?.addEventListener("submit", async (event) => {
     return;
   }
   const formData = new FormData(inviteForm);
-  const inviteTarget = normalizeText(formData.get("inviteTarget")?.toString() ?? "");
-  const inviteByEmail = inviteTarget.includes("@");
-  const email = inviteByEmail ? normalizeEmail(inviteTarget) : "";
-  const invitedUserId = inviteByEmail ? "" : inviteTarget;
-  const inviteTargetLabel = inviteByEmail ? email : invitedUserId;
+  const email = normalizeEmail(formData.get("email")?.toString() ?? "");
+  const invitedUserId = normalizeText(formData.get("invitedUserId")?.toString() ?? "");
+  const inviteTargetLabel = invitedUserId || email;
   const role = normalizeRole(formData.get("role")?.toString() ?? "Member");
   if (!canInviteRole(role)) {
     setAuthMessage("Можеш да каниш само с роля по-ниска от твоята.");

@@ -931,11 +931,11 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    const existingUser = invitedUserId
-      ? db.users.find((item) => item.id === invitedUserId) ?? null
-      : db.users.find((item) => normalizeEmail(item.email) === email) ?? null;
+    const existingUserById = invitedUserId ? db.users.find((item) => item.id === invitedUserId) ?? null : null;
+    const existingUserByEmail = email ? db.users.find((item) => normalizeEmail(item.email) === email) ?? null : null;
+    const existingUser = existingUserById ?? existingUserByEmail;
 
-    if (invitedUserId && !existingUser) {
+    if (invitedUserId && !existingUserById && !email) {
       send(res, 404, { message: "Потребител с това ID не е намерен. Покани го по имейл, за да споделиш линк." });
       return;
     }
