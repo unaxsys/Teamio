@@ -145,6 +145,7 @@
         <nav class="nav">
           <button class="nav__item nav__item--active" data-tab="boards">Табла</button>
           <button class="nav__item" data-tab="teams">Екипи</button>
+          <button class="nav__item" data-tab="members">Members / Invites <span class="nav-badge" id="members-invites-badge">0</span></button>
           <button class="nav__item" data-tab="calendar">Календар</button>
           <button class="nav__item" data-tab="reports">Отчети</button>
           <button class="nav__item" data-tab="settings">Настройки</button>
@@ -239,7 +240,20 @@
               </div>
             </div>
             <div class="panel-card" style="margin-top: 16px;">
-              <h3>Покани по имейл</h3>
+              <h3>Моите покани</h3>
+              <p class="panel-list__meta">Тук можеш да приемеш или откажеш покана, когато имейлът ти е поканен.</p>
+              <div class="panel-list" id="my-invite-list"></div>
+            </div>
+          </div>
+        </section>
+
+
+        <section class="tab-panel" data-tab-panel="members">
+          <div class="panel-card">
+            <h2>Members / Invites</h2>
+            <p>Управлявай покани и членове в workspace-а.</p>
+            <div class="panel-card" style="margin-top: 16px;">
+              <h3>Pending invites <span class="nav-badge nav-badge--inline" id="pending-invites-count">0</span></h3>
               <form class="panel-form" id="invite-form">
                 <label>
                   Имейл
@@ -264,15 +278,12 @@
               </div>
               <div class="panel-list" id="invite-list"></div>
             </div>
-
             <div class="panel-card" style="margin-top: 16px;">
-              <h3>Моите покани</h3>
-              <p class="panel-list__meta">Тук можеш да приемеш или откажеш покана, когато имейлът ти е поканен.</p>
-              <div class="panel-list" id="my-invite-list"></div>
+              <h3>Accepted members</h3>
+              <div class="panel-list" id="accepted-members-list"></div>
             </div>
           </div>
         </section>
-
         <section class="tab-panel" data-tab-panel="calendar">
           <div class="panel-card">
             <h2>Календар</h2>
