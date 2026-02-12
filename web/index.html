@@ -264,6 +264,7 @@
                   <select name="role" required>
                     <option value="Viewer">Viewer</option>
                     <option value="Member" selected>Member</option>
+                    <option value="Manager">Manager</option>
                     <option value="Admin">Admin</option>
                   </select>
                 </label>
@@ -276,6 +277,21 @@
                   <button type="button" class="ghost" id="invite-copy-link">Копирай</button>
                 </div>
               </div>
+            </div>
+            <div class="panel-card" style="margin-top: 16px;">
+              <h3>Accepted members</h3>
+              <div class="panel-list" id="accepted-members-list"></div>
+            </div>
+          </div>
+        </section>
+
+
+        <section class="tab-panel" data-tab-panel="members">
+          <div class="panel-card">
+            <h2>Members / Invites</h2>
+            <p>Управлявай покани и членове в workspace-а.</p>
+            <div class="panel-card" style="margin-top: 16px;">
+              <h3>Pending invites <span class="nav-badge nav-badge--inline" id="pending-invites-count">0</span></h3>
               <div class="panel-list" id="invite-list"></div>
             </div>
             <div class="panel-card" style="margin-top: 16px;">
@@ -483,7 +499,12 @@
           </label>
           <label>
             Роля
-            <input type="text" name="role" placeholder="Продукт, QA, Дизайн" required />
+            <select name="role" required>
+              <option value="Viewer">Viewer</option>
+              <option value="Member" selected>Member</option>
+              <option value="Manager">Manager</option>
+              <option value="Admin">Admin</option>
+            </select>
           </label>
           <label>
             Екипи

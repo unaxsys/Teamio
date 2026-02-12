@@ -37,6 +37,7 @@ const normalizeWorkspaceRole = (role = "") => {
   const normalized = normalizeText(role).toLowerCase();
   if (["owner", "собственик"].includes(normalized)) return "Owner";
   if (normalized === "admin") return "Admin";
+  if (normalized === "manager" || normalized === "мениджър") return "Manager";
   if (normalized === "viewer") return "Viewer";
   return "Member";
 };

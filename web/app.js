@@ -107,7 +107,7 @@ let boardSearchQuery = "";
 const ACCOUNT_PLANS = ["Free", "Pro", "Team"];
 const ACCOUNT_STATUSES = ["active", "suspended"];
 const BOARD_VISIBILITIES = ["private", "workspace", "public"];
-const WORKSPACE_ROLES = ["Owner", "Admin", "Member", "Viewer"];
+const WORKSPACE_ROLES = ["Owner", "Admin", "Manager", "Member", "Viewer"];
 const CARD_PRIORITIES = ["low", "medium", "high", "urgent"];
 const CARD_STATUSES = ["todo", "in_progress", "review", "done"];
 
@@ -181,12 +181,15 @@ const groupLabels = {
 };
 
 const normalizeRole = (role) => {
-  const normalized = normalizeText(role);
+  const normalized = normalizeText(role).toLowerCase();
   if (!normalized) {
     return "Member";
   }
-  const match = WORKSPACE_ROLES.find((entry) => entry.toLowerCase() === normalized.toLowerCase());
-  return match ?? "Member";
+  if (["owner", "собственик"].includes(normalized)) return "Owner";
+  if (normalized === "admin") return "Admin";
+  if (normalized === "manager" || normalized === "мениджър") return "Manager";
+  if (normalized === "viewer") return "Viewer";
+  return "Member";
 };
 
 const createDefaultWorkspace = (ownerUserId = null) => ({
@@ -579,7 +582,7 @@ const hasPermission = (scope, action) => {
     Account: { billing: ["Owner"], delete: ["Owner"] },
     Workspace: { members: ["Owner", "Admin"], boards: ["Owner", "Admin"] },
     Board: { lists: ["Owner", "Admin"], cards: ["Owner", "Admin", "Member"] },
-    Card: { edit: ["Owner", "Admin"], assign: ["Owner", "Admin"], comment: ["Owner", "Admin", "Member", "Viewer"] },
+    Card: { edit: ["Owner", "Admin", "Manager"], assign: ["Owner", "Admin"], comment: ["Owner", "Admin", "Manager", "Member", "Viewer"] },
   };
 
   const allowedRoles = matrix[scope]?.[action] ?? [];
@@ -590,6 +593,15 @@ const hasManagementAccess = () => hasPermission("Workspace", "members") || hasPe
 
 const canCreateCards = () => hasPermission("Board", "cards");
 const canManageBoardStructure = () => hasPermission("Board", "lists");
+const canViewReports = () => {
+  const role = normalizeRole(loadCurrentUser()?.role ?? "Member");
+  return ["Owner", "Admin", "Manager"].includes(role);
+};
+const roleWeight = { Owner: 4, Admin: 3, Manager: 2, Member: 1, Viewer: 0 };
+const canInviteRole = (targetRole) => {
+  const currentRole = normalizeRole(loadCurrentUser()?.role ?? "Member");
+  return (roleWeight[currentRole] ?? 0) > (roleWeight[normalizeRole(targetRole)] ?? 0);
+};
 const canEditTask = (task) => {
   const user = loadCurrentUser();
   if (!user || !task) {
@@ -684,7 +696,7 @@ const syncInvitesFromApi = async () => {
   }
 
   const params = new URLSearchParams();
-  if (user.accountId) {
+  if (user.accountId && hasManagementAccess()) {
     params.set("accountId", user.accountId);
     params.set("requesterUserId", user.id);
   }
@@ -842,6 +854,7 @@ const showApp = async (user) => {
   renderInvites();
   renderMyInvites();
   renderMembersInvitesSummary();
+  renderTeams();
   updateReports();
 };
 
@@ -1186,12 +1199,28 @@ const createCard = (task, columnColor) => {
   return card;
 };
 
+const isDoneColumn = (columnId) => {
+  const column = loadColumns().find((entry) => entry.id === columnId);
+  const title = normalizeText(column?.title ?? "").toLowerCase();
+  return title.includes("готов") || title.includes("done") || String(columnId).startsWith("done");
+};
+
+const normalizeTaskCompletion = (task) => {
+  const completed = Boolean(task.completed) || task.status === "done" || isDoneColumn(task.column);
+  return {
+    ...task,
+    completed,
+    status: completed ? "done" : (task.status === "done" ? "todo" : (task.status ?? "todo")),
+    completedAt: completed ? (task.completedAt ?? Date.now()) : null,
+  };
+};
+
 const renderBoard = (tasks) => {
   boardEl.innerHTML = "";
   updateBoardTopbar();
   const filteredTasks = getFilteredTasksBySearch(tasks);
   const columns = loadColumns();
-  const activeCount = filteredTasks.filter((task) => task.column !== "done").length;
+  const activeCount = filteredTasks.filter((task) => !normalizeTaskCompletion(task).completed).length;
   const dueCount = filteredTasks.filter((task) => task.due).length;
   statActive.textContent = activeCount.toString();
   statDue.textContent = dueCount.toString();
@@ -1332,7 +1361,10 @@ const renderBoard = (tasks) => {
         setAuthMessage("Нямаш право да местиш тази карта.");
         return;
       }
-      const updated = allTasks.map((task) => (task.id === taskId ? { ...task, column: column.id, listId: column.id } : task));
+      const updated = allTasks.map((task) => {
+        if (task.id !== taskId) return task;
+        return normalizeTaskCompletion({ ...task, column: column.id, listId: column.id });
+      });
       saveTasks(updated);
       renderBoard(getVisibleTasks());
       renderCalendar();
@@ -1940,13 +1972,15 @@ const renderCalendar = () => {
 };
 
 const updateReports = () => {
-  const tasks = getVisibleTasks();
-  const doneCount = tasks.filter((task) => task.column === "done").length;
-  const activeCount = tasks.filter((task) => task.column !== "done").length;
-  const teamCount = getCurrentAccount()?.members?.length ?? 0;
+  const tasks = getVisibleTasks().map(normalizeTaskCompletion);
+  const doneCount = tasks.filter((task) => task.completed).length;
+  const activeCount = tasks.filter((task) => !task.completed).length;
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const doneThisWeek = tasks.filter((task) => task.completed && (task.completedAt ?? 0) >= weekAgo).length;
   reportDone.textContent = doneCount.toString();
   reportActive.textContent = activeCount.toString();
-  reportVelocity.textContent = teamCount > 0 ? `${Math.round((doneCount / teamCount) * 100)}%` : "0%";
+  reportVelocity.textContent = `${doneThisWeek} / 7 дни`;
+  const teamCount = getCurrentAccount()?.members?.length ?? 0;
   if (statTeamSize) {
     statTeamSize.textContent = `${teamCount}`;
   }
@@ -2138,9 +2172,13 @@ teamForm?.addEventListener("submit", (event) => {
   const newMember = {
     id: `member-${Date.now()}`,
     name: normalizeText(formData.get("name")?.toString() ?? ""),
-    role: normalizeText(formData.get("role")?.toString() ?? ""),
+    role: normalizeRole(formData.get("role")?.toString() ?? "Member"),
     teamIds: selectedTeamIds,
   };
+  if (!canInviteRole(newMember.role)) {
+    setAuthMessage("Можеш да добавиш човек само с по-ниска роля.");
+    return;
+  }
   if (!newMember.name || !newMember.role) {
     return;
   }
@@ -2300,23 +2338,24 @@ taskDetailsForm?.addEventListener("submit", (event) => {
     setAuthMessage("Нямаш право да редактираш тази карта.");
     return;
   }
-  const updatedTasks = tasks.map((task) =>
-    task.id === taskId
-      ? {
-          ...task,
-          title: formData.get("title")?.toString().trim() ?? task.title,
-          description: formData.get("description")?.toString() ?? "",
-          due: formData.get("due")?.toString() ?? "",
-          level: formData.get("level")?.toString() ?? "L2",
-          completed: formData.get("completed") === "on",
-          status: formData.get("completed") === "on" ? "done" : (task.status ?? "todo"),
-          activityLog: [
-            ...(task.activityLog ?? []),
-            { id: `activity-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`, type: "card_updated", userId: loadCurrentUser()?.id ?? null, createdAt: Date.now() },
-          ],
-        }
-      : task
-  );
+  const updatedTasks = tasks.map((task) => {
+    if (task.id !== taskId) {
+      return task;
+    }
+    return normalizeTaskCompletion({
+      ...task,
+      title: formData.get("title")?.toString().trim() ?? task.title,
+      description: formData.get("description")?.toString() ?? "",
+      due: formData.get("due")?.toString() ?? "",
+      level: formData.get("level")?.toString() ?? "L2",
+      completed: formData.get("completed") === "on",
+      status: formData.get("completed") === "on" ? "done" : (task.status ?? "todo"),
+      activityLog: [
+        ...(task.activityLog ?? []),
+        { id: `activity-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`, type: "card_updated", userId: loadCurrentUser()?.id ?? null, createdAt: Date.now() },
+      ],
+    });
+  });
   saveTasks(updatedTasks);
   renderBoard(updatedTasks);
   updateReports();
@@ -2377,11 +2416,20 @@ const applyRoleBasedTabVisibility = () => {
   document.querySelectorAll('[data-tab-panel="members"]').forEach((panel) => {
     panel.style.display = canManage ? "" : "none";
   });
+
+  const canSeeReports = canViewReports();
+  document.querySelectorAll('[data-tab="reports"]').forEach((item) => {
+    item.style.display = canSeeReports ? "inline-flex" : "none";
+  });
+  document.querySelectorAll('[data-tab-panel="reports"]').forEach((panel) => {
+    panel.style.display = canSeeReports ? "" : "none";
+  });
 };
 
 const activateTab = (tabId) => {
   const canManage = hasManagementAccess();
-  const safeTabId = tabId === "members" && !canManage ? "boards" : tabId;
+  const safeMembersTabId = tabId === "members" && !canManage ? "boards" : tabId;
+  const safeTabId = safeMembersTabId === "reports" && !canViewReports() ? "boards" : safeMembersTabId;
   navItems.forEach((item) => {
     item.classList.toggle("nav__item--active", item.dataset.tab === safeTabId);
   });
@@ -2566,7 +2614,11 @@ inviteForm?.addEventListener("submit", async (event) => {
   }
   const formData = new FormData(inviteForm);
   const email = normalizeEmail(formData.get("email")?.toString() ?? "");
-  const role = normalizeText(formData.get("role")?.toString() ?? "Member");
+  const role = normalizeRole(formData.get("role")?.toString() ?? "Member");
+  if (!canInviteRole(role)) {
+    setAuthMessage("Можеш да каниш само с роля по-ниска от твоята.");
+    return;
+  }
   const account = getCurrentAccount();
   if (!account || !email) {
     return;
@@ -2610,6 +2662,10 @@ inviteForm?.addEventListener("submit", async (event) => {
     invite = apiResult.data.invite;
     await syncInvitesFromApi();
   } else {
+    if (apiResult?.data?.message === "Forbidden") {
+      setAuthMessage("403 Forbidden: Нямаш право да изпращаш покани.");
+      return;
+    }
     const invites = loadInvites();
     invites.unshift(invite);
     saveInvites(invites);
@@ -2636,6 +2692,7 @@ inviteForm?.addEventListener("submit", async (event) => {
   renderInvites();
   renderMyInvites();
   renderMembersInvitesSummary();
+  renderTeams();
 });
 
 inviteCopyLinkButton?.addEventListener("click", async () => {
@@ -2699,7 +2756,7 @@ formEl.addEventListener("submit", async (event) => {
   const tasks = loadTasks();
   const cardColumn = formData.get("column").toString();
   const now = Date.now();
-  const newTask = {
+  const newTask = normalizeTaskCompletion({
     id: `task-${now}`,
     title: formData.get("title").toString(),
     description: formData.get("description").toString(),
@@ -2720,7 +2777,7 @@ formEl.addEventListener("submit", async (event) => {
     teamIds: selectedTeamIds,
     accountId: currentUser?.accountId,
     boardId: getCurrentBoardId(),
-  };
+  });
   const apiResult = await apiRequest("/api/cards", {
     method: "POST",
     body: JSON.stringify({
