@@ -482,14 +482,19 @@ const server = createServer(async (req, res) => {
         nextAccount.ownerUserId = newUser.id;
       }
 
-      nextAccount.workspaces = (nextAccount.workspaces ?? []).map((workspace) => ({
-        ...workspace,
-        ownerUserId: !invite ? newUser.id : (workspace.ownerUserId ?? nextAccount.ownerUserId ?? null),
-        memberRoles: [
-          ...(workspace.memberRoles ?? []).filter((member) => member.userId !== newUser.id),
-          { userId: newUser.id, role: invite?.role ?? (!invite ? "Owner" : "Member") },
-        ],
-      }));
+      nextAccount.workspaces = (nextAccount.workspaces ?? []).map((workspace) => {
+        const shouldGrantWorkspaceRole = !invite || !invite.workspaceId || workspace.id === invite.workspaceId;
+        return {
+          ...workspace,
+          ownerUserId: !invite ? newUser.id : (workspace.ownerUserId ?? nextAccount.ownerUserId ?? null),
+          memberRoles: shouldGrantWorkspaceRole
+            ? [
+                ...(workspace.memberRoles ?? []).filter((member) => member.userId !== newUser.id),
+                { userId: newUser.id, role: invite?.role ?? (!invite ? "Owner" : "Member") },
+              ]
+            : (workspace.memberRoles ?? []),
+        };
+      });
 
       return nextAccount;
     });
@@ -776,10 +781,13 @@ const server = createServer(async (req, res) => {
       .map((invite) => {
         const account = db.accounts.find((entry) => entry.id === invite.accountId);
         const invitedByUser = db.users.find((entry) => entry.id === invite.invitedByUserId);
+        const workspace = (account?.workspaces ?? []).find((entry) => entry.id === invite.workspaceId);
         return {
           ...invite,
           accountName: account?.name ?? null,
           invitedByName: invitedByUser?.name ?? invitedByUser?.email ?? null,
+          workspaceName: workspace?.name ?? null,
+          boardName: normalizeText(invite.boardName ?? "") || null,
         };
       });
 
@@ -793,6 +801,9 @@ const server = createServer(async (req, res) => {
     const invitedByUserId = normalizeText(body.invitedByUserId);
     const email = normalizeEmail(body.email);
     const role = normalizeWorkspaceRole(body.role || "Member");
+    const workspaceId = normalizeText(body.workspaceId);
+    const boardId = normalizeText(body.boardId);
+    const boardName = normalizeText(body.boardName);
 
     if (!accountId || !email) {
       send(res, 400, { message: "Липсват данни за покана." });
@@ -808,6 +819,11 @@ const server = createServer(async (req, res) => {
 
     if (!canManageMembers(db, account, invitedByUserId)) {
       send(res, 403, { message: "Forbidden" });
+      return;
+    }
+
+    if (workspaceId && !(account.workspaces ?? []).some((workspace) => workspace.id === workspaceId)) {
+      send(res, 400, { message: "Невалидно workspace за поканата." });
       return;
     }
 
@@ -835,6 +851,9 @@ const server = createServer(async (req, res) => {
       invitedUserId: existingUser?.id ?? null,
       email,
       role,
+      workspaceId: workspaceId || null,
+      boardId: boardId || null,
+      boardName: boardName || null,
       delivery: existingUser ? "internal" : "email",
       token: randomBytes(16).toString("hex"),
       expiresAt: Date.now() + 48 * 60 * 60 * 1000,
@@ -1298,6 +1317,10 @@ const server = createServer(async (req, res) => {
             ];
 
         const nextWorkspaces = (account.workspaces ?? []).map((workspace) => {
+          const shouldGrantWorkspaceRole = !invite.workspaceId || workspace.id === invite.workspaceId;
+          if (!shouldGrantWorkspaceRole) {
+            return workspace;
+          }
           const existingWorkspaceMember = (workspace.memberRoles ?? []).find((member) => member.userId === userId);
           return {
             ...workspace,

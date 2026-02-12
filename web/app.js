@@ -1745,7 +1745,9 @@ const renderMyInvites = () => {
     item.className = "panel-list__item panel-list__item--stack";
 
     const status = getInviteStatusLabel(invite);
-    item.innerHTML = `<div><strong>${accountName}</strong><div class="panel-list__meta">Покана от: ${invitedByName} · До: ${invite.email} · Роля: ${invite.role} · ${status}</div></div>`;
+    const workspaceLabel = invite.workspaceName || (invite.workspaceId ? "Избрано пространство" : "Всички пространства");
+    const boardLabel = invite.boardName || (invite.boardId ? "Избран борд" : "");
+    item.innerHTML = `<div><strong>${accountName}</strong><div class="panel-list__meta">Покана от: ${invitedByName} · До: ${invite.email} · Пространство: ${workspaceLabel}${boardLabel ? ` · Борд: ${boardLabel}` : ""} · Роля: ${invite.role} · ${status}</div></div>`;
 
     const canRespond = !invite.acceptedAt && !invite.declinedAt && !invite.revokedAt && invite.expiresAt > Date.now();
     if (canRespond) {
@@ -1785,6 +1787,9 @@ const renderMyInvites = () => {
 
         const nextCurrentUser = { ...currentUser, accountId: invite.accountId, role: invite.role, teamIds: currentUser.teamIds ?? [] };
         setCurrentUser(nextCurrentUser);
+        if (invite.boardId) {
+          setCurrentBoardId(invite.boardId);
+        }
 
         renderInvites();
         renderMyInvites();
@@ -3009,6 +3014,8 @@ inviteForm?.addEventListener("submit", async (event) => {
     return;
   }
   const account = getCurrentAccount();
+  const workspace = getCurrentWorkspace();
+  const currentBoard = loadBoards().find((board) => board.id === getCurrentBoardId()) ?? null;
   if (!account || !email) {
     return;
   }
@@ -3034,6 +3041,9 @@ inviteForm?.addEventListener("submit", async (event) => {
       invitedByUserId: loadCurrentUser()?.id ?? null,
       email,
       role,
+      workspaceId: workspace?.id ?? null,
+      boardId: currentBoard?.id ?? null,
+      boardName: currentBoard?.name ?? null,
     }),
   });
 
