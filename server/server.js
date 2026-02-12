@@ -70,7 +70,6 @@ const normalizeWorkspaceRole = (role = "") => {
   return "Member";
 };
 
-
 const EMAIL_PROVIDER = normalizeText(process.env.EMAIL_PROVIDER || "resend").toLowerCase();
 const EMAIL_FROM = normalizeText(process.env.EMAIL_FROM || "");
 const EMAIL_REPLY_TO = normalizeText(process.env.EMAIL_REPLY_TO || "");
@@ -85,7 +84,6 @@ const getConfiguredProviders = () => {
   if (BREVO_API_KEY) providers.push("brevo");
   return providers;
 };
-
 
 const getPublicBaseUrl = (req) => {
   if (BASE_URL) {
@@ -383,6 +381,59 @@ const serveStaticFile = async (req, res, requestUrl) => {
   }
 };
 
+/* =========================
+   INVITES / NOTIFICATIONS HELPERS (NEW)
+   ========================= */
+const isInviteActive = (invite, now = Date.now()) => {
+  if (!invite) return false;
+  if (invite.acceptedAt || invite.declinedAt || invite.revokedAt) return false;
+  if (typeof invite.expiresAt === "number" && invite.expiresAt <= now) return false;
+  return true;
+};
+
+const createNotification = (db, { userId, type, title, message, payload }) => {
+  if (!db.notifications) db.notifications = [];
+  const now = Date.now();
+  const id = `notif-${now}-${randomBytes(4).toString("hex")}`;
+  const notification = {
+    id,
+    userId,
+    type: normalizeText(type || "info"),
+    title: normalizeText(title || "Известие"),
+    message: normalizeText(message || ""),
+    payload: payload && typeof payload === "object" ? payload : {},
+    createdAt: now,
+    readAt: null,
+  };
+  db.notifications.unshift(notification);
+  return notification;
+};
+
+const markInviteNotificationsRead = (db, inviteId, userId) => {
+  if (!db.notifications) return;
+  const now = Date.now();
+  db.notifications = db.notifications.map((n) => {
+    const matchesInvite = n?.payload?.inviteId === inviteId;
+    if (!matchesInvite) return n;
+    if (userId && n.userId && n.userId !== userId) return n;
+    if (n.readAt) return n;
+    return { ...n, readAt: now };
+  });
+};
+
+const mapInviteView = (db, invite) => {
+  const account = db.accounts.find((entry) => entry.id === invite.accountId);
+  const invitedByUser = db.users.find((entry) => entry.id === invite.invitedByUserId);
+  const workspace = (account?.workspaces ?? []).find((entry) => entry.id === invite.workspaceId);
+  return {
+    ...invite,
+    accountName: account?.name ?? null,
+    invitedByName: invitedByUser?.name ?? invitedByUser?.email ?? null,
+    workspaceName: workspace?.name ?? null,
+    boardName: normalizeText(invite.boardName ?? "") || null,
+  };
+};
+
 const server = createServer(async (req, res) => {
   if (req.method === "OPTIONS") {
     send(res, 200, { ok: true });
@@ -463,6 +514,7 @@ const server = createServer(async (req, res) => {
       role: invite?.role ?? "Собственик",
       teamIds: [],
       isEmailVerified: true,
+      createdAt: Date.now(),
     };
 
     db.accounts = db.accounts.map((account) => {
@@ -511,7 +563,6 @@ const server = createServer(async (req, res) => {
     send(res, 201, { message: "Регистрацията е успешна." });
     return;
   }
-
 
   if (requestUrl.pathname === "/api/auth/verify-email" && req.method === "POST") {
     const body = await readBody(req);
@@ -573,7 +624,16 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    send(res, 200, { user: { id: user.id, name: user.name, email: user.email, accountId: user.accountId, role: user.role, teamIds: user.teamIds ?? [] } });
+    send(res, 200, {
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        accountId: user.accountId,
+        role: user.role,
+        teamIds: user.teamIds ?? [],
+      },
+    });
     return;
   }
 
@@ -631,7 +691,6 @@ const server = createServer(async (req, res) => {
     send(res, 200, { message: "Паролата е обновена." });
     return;
   }
-
 
   if (requestUrl.pathname === "/api/accounts/company-profile" && req.method === "GET") {
     const accountId = normalizeText(requestUrl.searchParams.get("accountId") ?? "");
@@ -747,6 +806,40 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  /* =========================
+     INVITES INBOX (NEW)
+     - This is what the invited user calls to SEE their invites
+     ========================= */
+  if (requestUrl.pathname === "/api/invites/inbox" && req.method === "GET") {
+    const userId = normalizeText(requestUrl.searchParams.get("userId") ?? "");
+    const email = normalizeEmail(requestUrl.searchParams.get("email") ?? "");
+
+    if (!userId && !email) {
+      send(res, 400, { message: "Липсва userId или email." });
+      return;
+    }
+
+    const db = ensureDbShape(await readDb());
+    const resolvedUser = userId ? db.users.find((u) => u.id === userId) : db.users.find((u) => normalizeEmail(u.email) === email);
+
+    const resolvedUserId = resolvedUser?.id ?? (userId || "");
+    const resolvedEmail = resolvedUser ? normalizeEmail(resolvedUser.email) : email;
+
+    const now = Date.now();
+
+    const invites = db.invites
+      .filter((invite) => {
+        if (!isInviteActive(invite, now)) return false;
+        const byUser = resolvedUserId ? invite.invitedUserId === resolvedUserId : false;
+        const byEmail = resolvedEmail ? normalizeEmail(invite.email) === resolvedEmail : false;
+        return byUser || byEmail;
+      })
+      .map((invite) => mapInviteView(db, invite));
+
+    send(res, 200, { invites });
+    return;
+  }
+
   if (requestUrl.pathname === "/api/invites" && req.method === "GET") {
     const accountId = normalizeText(requestUrl.searchParams.get("accountId") ?? "");
     const email = normalizeEmail(requestUrl.searchParams.get("email") ?? "");
@@ -765,7 +858,7 @@ const server = createServer(async (req, res) => {
 
       if (account && canManageMembers(db, account, requesterUserId)) {
         canReadAccountInvites = true;
-      } else if (!email) {
+      } else if (!email && !userId) {
         send(res, 403, { message: "Forbidden" });
         return;
       }
@@ -778,18 +871,7 @@ const server = createServer(async (req, res) => {
         const byInvitedUser = userId ? invite.invitedUserId === userId : false;
         return byAccount || byEmail || byInvitedUser;
       })
-      .map((invite) => {
-        const account = db.accounts.find((entry) => entry.id === invite.accountId);
-        const invitedByUser = db.users.find((entry) => entry.id === invite.invitedByUserId);
-        const workspace = (account?.workspaces ?? []).find((entry) => entry.id === invite.workspaceId);
-        return {
-          ...invite,
-          accountName: account?.name ?? null,
-          invitedByName: invitedByUser?.name ?? invitedByUser?.email ?? null,
-          workspaceName: workspace?.name ?? null,
-          boardName: normalizeText(invite.boardName ?? "") || null,
-        };
-      });
+      .map((invite) => mapInviteView(db, invite));
 
     send(res, 200, { invites });
     return;
@@ -805,8 +887,8 @@ const server = createServer(async (req, res) => {
     const boardId = normalizeText(body.boardId);
     const boardName = normalizeText(body.boardName);
 
-    if (!accountId || !email) {
-      send(res, 400, { message: "Липсват данни за покана." });
+    if (!accountId || !email || !invitedByUserId) {
+      send(res, 400, { message: "Липсват данни за покана (accountId/email/invitedByUserId)." });
       return;
     }
 
@@ -814,6 +896,13 @@ const server = createServer(async (req, res) => {
     const account = db.accounts.find((item) => item.id === accountId);
     if (!account) {
       send(res, 404, { message: "Фирмата не е намерена." });
+      return;
+    }
+
+    // Prevent self-invite
+    const inviter = db.users.find((u) => u.id === invitedByUserId) ?? null;
+    if (inviter && normalizeEmail(inviter.email) === email) {
+      send(res, 409, { message: "Не можеш да поканиш собствения си имейл." });
       return;
     }
 
@@ -828,11 +917,19 @@ const server = createServer(async (req, res) => {
     }
 
     const existingUser = db.users.find((item) => normalizeEmail(item.email) === email) ?? null;
+
+    // If the user exists AND is already a member -> don't create invite
+    if (existingUser && isAccountMember(db, account, existingUser.id)) {
+      send(res, 409, { message: "Потребителят вече има достъп до тази фирма." });
+      return;
+    }
+
     const now = Date.now();
 
+    // Revoke previous active invite for same target/account/email
     db.invites = db.invites.map((item) => {
       const sameTarget = item.accountId === accountId && normalizeEmail(item.email) === email;
-      const isActive = !item.acceptedAt && !item.declinedAt && !item.revokedAt && item.expiresAt > now;
+      const isActive = isInviteActive(item, now);
       if (sameTarget && isActive) {
         return {
           ...item,
@@ -856,14 +953,41 @@ const server = createServer(async (req, res) => {
       boardName: boardName || null,
       delivery: existingUser ? "internal" : "email",
       token: randomBytes(16).toString("hex"),
-      expiresAt: Date.now() + 48 * 60 * 60 * 1000,
+      createdAt: now,
+      expiresAt: now + 48 * 60 * 60 * 1000,
       acceptedAt: null,
       declinedAt: null,
       revokedAt: null,
       usedAt: null,
+      acceptedUserId: null,
+      declinedUserId: null,
+      revokedByUserId: null,
+      revokedReason: null,
     };
 
     db.invites.unshift(invite);
+
+    // NEW: notification for internal invites so it shows inside invited user's account
+    if (existingUser?.id) {
+      createNotification(db, {
+        userId: existingUser.id,
+        type: "invite",
+        title: "Нова покана",
+        message: `Имаш покана за достъп до ${account.name ?? "Teamio"}`,
+        payload: {
+          inviteId: invite.id,
+          accountId: invite.accountId,
+          accountName: account.name ?? null,
+          invitedByUserId: invitedByUserId || null,
+          workspaceId: invite.workspaceId,
+          boardId: invite.boardId,
+          boardName: invite.boardName,
+          email: invite.email,
+          role: invite.role,
+        },
+      });
+    }
+
     await writeDb(db);
 
     let deliveryReport = null;
@@ -883,7 +1007,7 @@ const server = createServer(async (req, res) => {
     }
 
     send(res, 201, {
-      invite,
+      invite: mapInviteView(db, invite),
       delivery: invite.delivery,
       existingUserId: existingUser?.id ?? null,
       deliveryReport,
@@ -920,7 +1044,7 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    if (invite.acceptedAt || invite.declinedAt || invite.revokedAt || invite.expiresAt < Date.now()) {
+    if (!isInviteActive(invite, Date.now())) {
       send(res, 409, { message: "Поканата не е активна." });
       return;
     }
@@ -931,9 +1055,10 @@ const server = createServer(async (req, res) => {
         ? { ...item, revokedAt: now, revokedByUserId: requesterUserId, revokedReason: "manual" }
         : item
     );
+
     await writeDb(db);
 
-    send(res, 200, { invite: db.invites.find((item) => item.id === inviteId) ?? null });
+    send(res, 200, { invite: mapInviteView(db, db.invites.find((item) => item.id === inviteId) ?? null) });
     return;
   }
 
@@ -958,8 +1083,9 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    const now = Date.now();
     const pendingInvites = db.invites
-      .filter((invite) => invite.accountId === accountId && !invite.acceptedAt && !invite.declinedAt && !invite.revokedAt && invite.expiresAt > Date.now())
+      .filter((invite) => invite.accountId === accountId && isInviteActive(invite, now))
       .map((invite) => ({
         id: invite.id,
         email: invite.email,
@@ -1256,7 +1382,7 @@ const server = createServer(async (req, res) => {
     const body = await readBody(req);
     const inviteId = normalizeText(body.inviteId);
     const action = normalizeText(body.action).toLowerCase();
-    const userId = normalizeText(body.userId);
+    let userId = normalizeText(body.userId);
     const email = normalizeEmail(body.email);
 
     if (!inviteId || !["accept", "decline"].includes(action)) {
@@ -1271,46 +1397,68 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    if (normalizeEmail(invite.email) !== email) {
+    // Resolve userId by email if missing
+    if (!userId && email) {
+      const u = db.users.find((x) => normalizeEmail(x.email) === email) ?? null;
+      if (u) userId = u.id;
+    }
+
+    // Validate target
+    if (email && normalizeEmail(invite.email) !== email) {
       send(res, 403, { message: "Поканата не е за този имейл." });
       return;
     }
 
-    if (invite.revokedAt || invite.expiresAt < Date.now()) {
+    if (invite.invitedUserId && userId && invite.invitedUserId !== userId) {
+      send(res, 403, { message: "Поканата не е за този потребител." });
+      return;
+    }
+
+    if (!isInviteActive(invite, Date.now())) {
       send(res, 400, { message: "Поканата е невалидна." });
       return;
     }
 
     const now = Date.now();
+
     if (action === "accept") {
+      // Mark invite accepted
       db.invites = db.invites.map((item) =>
         item.id === inviteId
           ? { ...item, acceptedAt: now, acceptedUserId: userId || item.acceptedUserId || null, declinedAt: null, usedAt: now }
           : item
       );
+
+      // Add member to account + workspace role
       db.accounts = db.accounts.map((account) => {
         if (account.id !== invite.accountId) {
           return account;
         }
 
-        const existingMember = (account.members ?? []).find((member) => normalizeEmail(member.email ?? "") === email);
-        const nextMembers = existingMember
-          ? (account.members ?? []).map((member) =>
-              normalizeEmail(member.email ?? "") === email
-                ? {
-                    ...member,
-                    userId: member.userId ?? userId ?? null,
-                    role: invite.role ?? member.role ?? "Member",
-                  }
-                : member
-            )
+        // If userId is known, prevent duplicates by userId and/or email
+        const existingMemberByEmail = (account.members ?? []).find((member) => normalizeEmail(member.email ?? "") === normalizeEmail(invite.email));
+        const existingMemberByUserId = userId ? (account.members ?? []).find((m) => (m.userId ?? m.id) === userId) : null;
+
+        const nextMembers = existingMemberByUserId || existingMemberByEmail
+          ? (account.members ?? []).map((member) => {
+              const memberEmail = normalizeEmail(member.email ?? "");
+              const memberId = member.userId ?? member.id ?? "";
+              const matches = (userId && memberId === userId) || (memberEmail && memberEmail === normalizeEmail(invite.email));
+              if (!matches) return member;
+              return {
+                ...member,
+                userId: member.userId ?? userId ?? null,
+                email: member.email ?? invite.email,
+                role: invite.role ?? member.role ?? "Member",
+              };
+            })
           : [
               ...(account.members ?? []),
               {
                 id: userId || `member-${Date.now()}`,
                 userId: userId || null,
-                name: email,
-                email,
+                name: invite.email,
+                email: invite.email,
                 role: invite.role ?? "Member",
                 teamIds: [],
               },
@@ -1321,6 +1469,8 @@ const server = createServer(async (req, res) => {
           if (!shouldGrantWorkspaceRole) {
             return workspace;
           }
+          if (!userId) return workspace;
+
           const existingWorkspaceMember = (workspace.memberRoles ?? []).find((member) => member.userId === userId);
           return {
             ...workspace,
@@ -1328,7 +1478,7 @@ const server = createServer(async (req, res) => {
               ? (workspace.memberRoles ?? []).map((member) =>
                   member.userId === userId ? { ...member, role: invite.role ?? member.role ?? "Member" } : member
                 )
-              : [...(workspace.memberRoles ?? []), ...(userId ? [{ userId, role: invite.role ?? "Member" }] : [])],
+              : [...(workspace.memberRoles ?? []), { userId, role: invite.role ?? "Member" }],
           };
         });
 
@@ -1338,15 +1488,30 @@ const server = createServer(async (req, res) => {
           workspaces: nextWorkspaces,
         };
       });
+
+      // Optionally link user's accountId (only if it's empty) - keep your current model intact
+      if (userId) {
+        db.users = db.users.map((u) => {
+          if (u.id !== userId) return u;
+          if (u.accountId) return u; // do not override
+          return { ...u, accountId: invite.accountId };
+        });
+      }
+
+      // Mark invite notifications as read
+      markInviteNotificationsRead(db, inviteId, userId || null);
+
     } else {
       db.invites = db.invites.map((item) =>
         item.id === inviteId ? { ...item, declinedAt: now, declinedUserId: userId || null } : item
       );
+
+      markInviteNotificationsRead(db, inviteId, userId || null);
     }
 
     await writeDb(db);
     const updatedInvite = db.invites.find((item) => item.id === inviteId) ?? null;
-    send(res, 200, { invite: updatedInvite });
+    send(res, 200, { invite: updatedInvite ? mapInviteView(db, updatedInvite) : null });
     return;
   }
 
