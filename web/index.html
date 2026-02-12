@@ -77,10 +77,6 @@
             <input type="email" name="email" placeholder="team@company.com" required />
           </label>
           <label>
-            Фирма
-            <input type="text" name="companyName" placeholder="Пример: Teamio OOD" required />
-          </label>
-          <label>
             Парола
             <input type="password" name="password" placeholder="Минимум 6 символа" minlength="6" required />
           </label>
@@ -367,6 +363,29 @@
             <h2>Настройки</h2>
             <p>Персонализирай цветовете и предпочитанията на таблото.</p>
             <div class="settings-grid">
+              <div class="setting-item">
+                <h4>Фирмени данни</h4>
+                <p>Попълни данните на фирмата. Можеш да ги обновяваш по всяко време.</p>
+                <form id="company-profile-form" class="stacked-form">
+                  <label>
+                    Име на фирма
+                    <input type="text" name="name" placeholder="Пример: Teamio OOD" required />
+                  </label>
+                  <label>
+                    ЕИК / Булстат
+                    <input type="text" name="vatId" placeholder="Пример: 123456789" />
+                  </label>
+                  <label>
+                    ДДС номер
+                    <input type="text" name="vatNumber" placeholder="Пример: BG123456789" />
+                  </label>
+                  <label>
+                    Адрес
+                    <textarea name="address" rows="2" placeholder="Град, улица, номер"></textarea>
+                  </label>
+                  <button type="submit" class="primary">Запази фирмени данни</button>
+                </form>
+              </div>
               <div class="setting-item">
                 <h4>Акцентен цвят</h4>
                 <p>Избери основен акцент за интерфейса.</p>
