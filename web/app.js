@@ -2409,7 +2409,13 @@ closeNewPasswordButton.addEventListener("click", () => {
 const isOwnerOfCurrentAccount = () => {
   const account = getCurrentAccount();
   const currentUser = loadCurrentUser();
-  return Boolean(account?.ownerUserId && currentUser?.id && account.ownerUserId === currentUser.id);
+  if (!currentUser) {
+    return false;
+  }
+
+  const byAccountOwnerId = Boolean(account?.ownerUserId && account.ownerUserId === currentUser.id);
+  const byRole = normalizeRole(currentUser.role ?? "Member") === "Owner";
+  return byAccountOwnerId || byRole;
 };
 
 const fileToDataUrl = (file) =>

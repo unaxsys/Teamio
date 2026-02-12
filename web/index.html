@@ -188,7 +188,6 @@
                 placeholder="Търси задачи..."
                 aria-label="Търси в таблото"
               />
-              <button type="button" class="ghost board-icon-button" id="board-filter-button">Филтър</button>
               <button type="button" class="ghost board-icon-button" id="board-menu-button">⋯ Меню</button>
             </div>
           </div>
@@ -460,24 +459,10 @@
                     <input type="checkbox" id="setting-done-by-flag" />
                     Завършена задача, ако е маркирана в детайлите
                   </label>
-                  <label class="setting-check">
-                    <input type="checkbox" id="setting-show-board-filter" checked />
-                    Показвай филтъра по екипи над таблото
-                  </label>
                   <p class="panel-list__meta" id="done-criteria-help"></p>
                 </div>
               </section>
 
-              <section class="setting-item setting-item--accordion board-filter" id="board-filter-panel" data-setting-key="teams">
-                <button type="button" class="setting-item__toggle">
-                  <span>Филтър по екипи</span>
-                  <span class="setting-item__chevron">▾</span>
-                </button>
-                <div class="setting-item__body">
-                  <p>Избери екипите, които да се виждат в таблото със задачи.</p>
-                  <select id="board-team-filter" multiple></select>
-                </div>
-              </section>
             </div>
           </div>
         </section>
