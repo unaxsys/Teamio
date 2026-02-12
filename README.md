@@ -23,6 +23,8 @@ npm start
 
 This creates/uses `server/db.json` as the auth database.
 
+Server startup also reads `server/.env` automatically (if present), so production-like email/base URL settings can be used with plain `npm start`.
+
 By default the server binds to `0.0.0.0:8787` and prints the effective URL from `BASE_URL`.
 
 You can set a public base URL (for verification/reset links):
