@@ -246,6 +246,11 @@ const ensureDbShape = (db) => {
       workspaces,
       teams: Array.isArray(account.teams) ? account.teams : [],
       members: Array.isArray(account.members) ? account.members : [],
+      companyProfile: {
+        vatId: normalizeText(account.companyProfile?.vatId ?? ""),
+        vatNumber: normalizeText(account.companyProfile?.vatNumber ?? ""),
+        address: normalizeText(account.companyProfile?.address ?? ""),
+      },
     };
   });
 
@@ -398,7 +403,6 @@ const server = createServer(async (req, res) => {
     const name = normalizeText(body.name);
     const email = normalizeEmail(body.email);
     const password = normalizeText(body.password);
-    const companyName = normalizeText(body.companyName);
     const inviteToken = normalizeText(body.inviteToken);
 
     if (!name || !email || password.length < 6) {
@@ -421,17 +425,12 @@ const server = createServer(async (req, res) => {
         item.expiresAt > Date.now()
     );
 
-    if (!invite && !companyName) {
-      send(res, 400, { message: "Липсва име на фирма за нова регистрация." });
-      return;
-    }
-
     let accountId = invite?.accountId;
     if (!accountId) {
       accountId = `account-${Date.now()}`;
       db.accounts.push({
         id: accountId,
-        name: companyName,
+        name: `${name} - фирма`,
         ownerUserId: null,
         plan: "Free",
         status: "active",
@@ -442,6 +441,11 @@ const server = createServer(async (req, res) => {
           { id: `team-${Date.now()}-2`, name: "Инженерен екип" },
         ],
         members: [],
+        companyProfile: {
+          vatId: "",
+          vatNumber: "",
+          address: "",
+        },
       });
     }
 
