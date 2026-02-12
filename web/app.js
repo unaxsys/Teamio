@@ -118,6 +118,23 @@ const BOARD_VISIBILITIES = ["private", "workspace", "public"];
 const WORKSPACE_ROLES = ["Owner", "Admin", "Manager", "Member", "Viewer"];
 const CARD_PRIORITIES = ["low", "medium", "high", "urgent"];
 const CARD_STATUSES = ["todo", "in_progress", "review", "done"];
+const SYNC_STORAGE_KEYS = [
+  "teamio-boards",
+  "teamio-current-board",
+  "teamio-columns",
+  "teamio-tasks",
+  "teamio-calendar",
+  "teamio-accounts",
+  "teamio-users",
+  "teamio-members",
+  "teamio-invites",
+  "teamio-notifications",
+  "teamio-preferences",
+  "teamio-theme",
+  "teamio-density",
+  "teamio-calendar-view",
+  "teamio-calendar-focus",
+];
 
 
 const defaultBoards = [{ id: "board-default", name: "Основен борд", createdAt: Date.now(), visibility: "workspace", createdBy: null, workspaceId: null, members: [], settings: { allowComments: true, allowAttachments: true, labelsEnabled: true } }];
@@ -247,14 +264,14 @@ const loadPreferences = () => {
   };
   const stored = localStorage.getItem("teamio-preferences");
   if (!stored) {
-    localStorage.setItem("teamio-preferences", JSON.stringify(defaults));
+    persistAndSync("teamio-preferences", JSON.stringify(defaults));
     return defaults;
   }
   return { ...defaults, ...JSON.parse(stored) };
 };
 
 const savePreferences = (preferences) => {
-  localStorage.setItem("teamio-preferences", JSON.stringify(preferences));
+  persistAndSync("teamio-preferences", JSON.stringify(preferences));
 };
 
 let preferences = loadPreferences();
@@ -299,19 +316,19 @@ const loadBoards = () => {
   const workspace = getCurrentWorkspace();
   if (!stored) {
     const seeded = defaultBoards.map((board) => normalizeBoard({ ...board, workspaceId: workspace?.id ?? null }));
-    localStorage.setItem("teamio-boards", JSON.stringify(seeded));
-    localStorage.setItem("teamio-current-board", seeded[0].id);
+    persistAndSync("teamio-boards", JSON.stringify(seeded));
+    persistAndSync("teamio-current-board", seeded[0].id);
     return seeded;
   }
   const boards = JSON.parse(stored);
   if (!Array.isArray(boards) || boards.length === 0) {
     const seeded = defaultBoards.map((board) => normalizeBoard({ ...board, workspaceId: workspace?.id ?? null }));
-    localStorage.setItem("teamio-boards", JSON.stringify(seeded));
-    localStorage.setItem("teamio-current-board", seeded[0].id);
+    persistAndSync("teamio-boards", JSON.stringify(seeded));
+    persistAndSync("teamio-current-board", seeded[0].id);
     return seeded;
   }
   const normalized = boards.map((board) => normalizeBoard(board));
-  localStorage.setItem("teamio-boards", JSON.stringify(normalized));
+  persistAndSync("teamio-boards", JSON.stringify(normalized));
   if (!workspace?.id) {
     return normalized;
   }
@@ -324,11 +341,11 @@ const saveBoards = (boards) => {
   const existing = JSON.parse(localStorage.getItem("teamio-boards") ?? "[]");
   const safeBoards = boards.map((board) => normalizeBoard(board));
   if (!workspace?.id || !Array.isArray(existing)) {
-    localStorage.setItem("teamio-boards", JSON.stringify(safeBoards));
+    persistAndSync("teamio-boards", JSON.stringify(safeBoards));
     return;
   }
   const preserved = existing.filter((board) => board.workspaceId && board.workspaceId !== workspace.id);
-  localStorage.setItem("teamio-boards", JSON.stringify([...preserved, ...safeBoards]));
+  persistAndSync("teamio-boards", JSON.stringify([...preserved, ...safeBoards]));
 };
 
 const getCurrentBoardId = () => {
@@ -338,12 +355,12 @@ const getCurrentBoardId = () => {
     return current;
   }
   const fallback = boards[0]?.id ?? "board-default";
-  localStorage.setItem("teamio-current-board", fallback);
+  persistAndSync("teamio-current-board", fallback);
   return fallback;
 };
 
 const setCurrentBoardId = (boardId) => {
-  localStorage.setItem("teamio-current-board", boardId);
+  persistAndSync("teamio-current-board", boardId);
 };
 
 const renderBoardSelector = () => {
@@ -395,7 +412,7 @@ const getFilteredTasksBySearch = (tasks) => {
 const loadAllColumns = () => JSON.parse(localStorage.getItem("teamio-columns") ?? "[]");
 
 const saveAllColumns = (columns) => {
-  localStorage.setItem("teamio-columns", JSON.stringify(columns));
+  persistAndSync("teamio-columns", JSON.stringify(columns));
 };
 
 const createDefaultColumnsForBoard = (boardId) =>
@@ -434,7 +451,7 @@ const saveColumns = (columns) => {
 const loadUsers = () => JSON.parse(localStorage.getItem("teamio-users") ?? "[]");
 
 const saveUsers = (users) => {
-  localStorage.setItem("teamio-users", JSON.stringify(users));
+  persistAndSync("teamio-users", JSON.stringify(users));
 };
 
 const loadAccounts = () => {
@@ -443,12 +460,12 @@ const loadAccounts = () => {
     return [];
   }
   const normalized = parsed.map((account) => normalizeAccount(account));
-  localStorage.setItem("teamio-accounts", JSON.stringify(normalized));
+  persistAndSync("teamio-accounts", JSON.stringify(normalized));
   return normalized;
 };
 
 const saveAccounts = (accounts) => {
-  localStorage.setItem("teamio-accounts", JSON.stringify(accounts));
+  persistAndSync("teamio-accounts", JSON.stringify(accounts));
 };
 
 const getCurrentAccount = () => {
@@ -546,7 +563,7 @@ const getVisibleTasks = () => {
 const loadCalendar = () => JSON.parse(localStorage.getItem("teamio-calendar") ?? "[]");
 
 const saveCalendar = (items) => {
-  localStorage.setItem("teamio-calendar", JSON.stringify(items));
+  persistAndSync("teamio-calendar", JSON.stringify(items));
 };
 
 const getCalendarItems = () => {
@@ -697,6 +714,82 @@ const apiRequest = async (path, options = {}) => {
   }
 };
 
+const getSyncContext = () => {
+  const user = loadCurrentUser();
+  const workspace = getCurrentWorkspace();
+  if (!user?.accountId || !user?.id || !workspace?.id) {
+    return null;
+  }
+  return {
+    accountId: user.accountId,
+    requesterUserId: user.id,
+    workspaceId: workspace.id,
+  };
+};
+
+const buildWorkspaceSnapshot = () => {
+  const snapshot = {};
+  SYNC_STORAGE_KEYS.forEach((key) => {
+    snapshot[key] = localStorage.getItem(key);
+  });
+  return snapshot;
+};
+
+const applyWorkspaceSnapshot = (snapshot) => {
+  if (!snapshot || typeof snapshot !== "object") {
+    return;
+  }
+  SYNC_STORAGE_KEYS.forEach((key) => {
+    const value = snapshot[key];
+    if (typeof value === "string") {
+      localStorage.setItem(key, value);
+    } else {
+      localStorage.removeItem(key);
+    }
+  });
+};
+
+let syncInProgress = false;
+const pushWorkspaceState = async () => {
+  const context = getSyncContext();
+  if (!context || syncInProgress) {
+    return;
+  }
+  syncInProgress = true;
+  try {
+    await apiRequest("/api/workspace-state", {
+      method: "PUT",
+      body: JSON.stringify({
+        ...context,
+        payload: buildWorkspaceSnapshot(),
+      }),
+    });
+  } finally {
+    syncInProgress = false;
+  }
+};
+
+const pullWorkspaceState = async () => {
+  const context = getSyncContext();
+  if (!context) {
+    return;
+  }
+  const params = new URLSearchParams(context);
+  const apiResult = await apiRequest(`/api/workspace-state?${params.toString()}`);
+  if (apiResult?.ok && apiResult.data?.state && typeof apiResult.data.state === "object") {
+    applyWorkspaceSnapshot(apiResult.data.state);
+  }
+};
+
+const persistAndSync = (key, value) => {
+  if (typeof value === "string") {
+    localStorage.setItem(key, value);
+  } else {
+    localStorage.removeItem(key);
+  }
+  void pushWorkspaceState();
+};
+
 const syncInvitesFromApi = async () => {
   const user = loadCurrentUser();
   if (!user) {
@@ -818,7 +911,7 @@ const setVerificationHelpWithLink = (verificationLink, email) => {
 };
 
 const setCurrentUser = (user) => {
-  localStorage.setItem("teamio-current-user", JSON.stringify(user));
+  persistAndSync("teamio-current-user", JSON.stringify(user));
 };
 
 const loadCurrentUser = () => {
@@ -843,6 +936,7 @@ const updateProfile = (user) => {
 
 const showApp = async (user) => {
   const normalizedUser = ensureAccountForUser(user);
+  await pullWorkspaceState();
   authScreenEl.style.display = "none";
   appEl.classList.remove("app--hidden");
   updateProfile(normalizedUser);
@@ -1004,7 +1098,7 @@ const applyThemeColor = (color) => {
   }
   document.documentElement.style.setProperty("--primary", color);
   document.documentElement.style.setProperty("--primary-dark", color);
-  localStorage.setItem("teamio-theme", color);
+  persistAndSync("teamio-theme", color);
 };
 
 const loadTheme = () => {
@@ -1021,7 +1115,7 @@ const applyDensity = (mode) => {
   densityButtons.forEach((button) => {
     button.classList.toggle("density-button--active", button.dataset.density === normalizedMode);
   });
-  localStorage.setItem("teamio-density", normalizedMode);
+  persistAndSync("teamio-density", normalizedMode);
 };
 
 const loadDensity = () => {
@@ -1081,7 +1175,7 @@ const loadTasks = () => {
       activityLog: [],
       createdBy: loadCurrentUser()?.id ?? null,
     }));
-    localStorage.setItem("teamio-tasks", JSON.stringify(seeded));
+    persistAndSync("teamio-tasks", JSON.stringify(seeded));
     return seeded;
   }
 
@@ -1112,14 +1206,14 @@ const loadTasks = () => {
   });
 
   if (hasChanges) {
-    localStorage.setItem("teamio-tasks", JSON.stringify(parsed));
+    persistAndSync("teamio-tasks", JSON.stringify(parsed));
   }
 
   return parsed;
 };
 
 const saveTasks = (tasks) => {
-  localStorage.setItem("teamio-tasks", JSON.stringify(tasks));
+  persistAndSync("teamio-tasks", JSON.stringify(tasks));
 };
 
 const openTaskModal = () => {
@@ -1393,7 +1487,7 @@ const renderBoard = (tasks) => {
 const loadNotifications = () => JSON.parse(localStorage.getItem("teamio-notifications") ?? "[]");
 
 const saveNotifications = (items) => {
-  localStorage.setItem("teamio-notifications", JSON.stringify(items));
+  persistAndSync("teamio-notifications", JSON.stringify(items));
 };
 
 const pushNotification = (notification) => {
@@ -1411,7 +1505,7 @@ const pushNotification = (notification) => {
 const loadInvites = () => JSON.parse(localStorage.getItem("teamio-invites") ?? "[]");
 
 const saveInvites = (invites) => {
-  localStorage.setItem("teamio-invites", JSON.stringify(invites));
+  persistAndSync("teamio-invites", JSON.stringify(invites));
 };
 
 const getInviteStatusLabel = (invite) => {
@@ -2220,7 +2314,7 @@ if (calendarFocusDateInput) {
 
 calendarViewSelect?.addEventListener("change", () => {
   calendarState.view = calendarViewSelect.value;
-  localStorage.setItem("teamio-calendar-view", calendarState.view);
+  persistAndSync("teamio-calendar-view", calendarState.view);
   renderCalendar();
 });
 
@@ -2229,13 +2323,13 @@ calendarFocusDateInput?.addEventListener("change", () => {
     return;
   }
   calendarState.focusDate = calendarFocusDateInput.value;
-  localStorage.setItem("teamio-calendar-focus", calendarState.focusDate);
+  persistAndSync("teamio-calendar-focus", calendarState.focusDate);
   renderCalendar();
 });
 
 calendarTodayButton?.addEventListener("click", () => {
   calendarState.focusDate = new Date().toISOString().slice(0, 10);
-  localStorage.setItem("teamio-calendar-focus", calendarState.focusDate);
+  persistAndSync("teamio-calendar-focus", calendarState.focusDate);
   if (calendarFocusDateInput) {
     calendarFocusDateInput.value = calendarState.focusDate;
   }
@@ -2250,7 +2344,7 @@ calendarPrevButton?.addEventListener("click", () => {
     current.setDate(current.getDate() - 7);
   }
   calendarState.focusDate = formatDateOnly(current);
-  localStorage.setItem("teamio-calendar-focus", calendarState.focusDate);
+  persistAndSync("teamio-calendar-focus", calendarState.focusDate);
   if (calendarFocusDateInput) {
     calendarFocusDateInput.value = calendarState.focusDate;
   }
@@ -2265,7 +2359,7 @@ calendarNextButton?.addEventListener("click", () => {
     current.setDate(current.getDate() + 7);
   }
   calendarState.focusDate = formatDateOnly(current);
-  localStorage.setItem("teamio-calendar-focus", calendarState.focusDate);
+  persistAndSync("teamio-calendar-focus", calendarState.focusDate);
   if (calendarFocusDateInput) {
     calendarFocusDateInput.value = calendarState.focusDate;
   }
@@ -2583,7 +2677,7 @@ companyProfileForm?.addEventListener("submit", async (event) => {
 });
 
 logoutButton.addEventListener("click", () => {
-  localStorage.removeItem("teamio-current-user");
+  persistAndSync("teamio-current-user", null);
   showAuth();
 });
 

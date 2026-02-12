@@ -231,6 +231,7 @@ const ensureDbShape = (db) => {
   db.invites ??= [];
   db.notifications ??= [];
   db.cards ??= [];
+  db.workspaceStates ??= [];
 
   db.accounts = db.accounts.map((account) => {
     const ownerUserId = account.ownerUserId ?? null;
@@ -263,7 +264,7 @@ const send = (res, statusCode, payload) => {
     "Content-Type": "application/json; charset=utf-8",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Allow-Methods": "GET,POST,PATCH,OPTIONS",
+    "Access-Control-Allow-Methods": "GET,POST,PUT,PATCH,OPTIONS",
   });
   res.end(JSON.stringify(payload));
 };
@@ -892,6 +893,83 @@ const server = createServer(async (req, res) => {
       pendingInvites,
       acceptedMembers: members,
     });
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/workspace-state" && req.method === "GET") {
+    const accountId = normalizeText(requestUrl.searchParams.get("accountId") ?? "");
+    const workspaceId = normalizeText(requestUrl.searchParams.get("workspaceId") ?? "");
+    const requesterUserId = normalizeText(requestUrl.searchParams.get("requesterUserId") ?? "");
+
+    if (!accountId || !workspaceId || !requesterUserId) {
+      send(res, 400, { message: "Липсват accountId/workspaceId/requesterUserId." });
+      return;
+    }
+
+    const db = ensureDbShape(await readDb());
+    const account = db.accounts.find((item) => item.id === accountId);
+    if (!account) {
+      send(res, 404, { message: "Фирмата не е намерена." });
+      return;
+    }
+
+    if (!isAccountMember(db, account, requesterUserId)) {
+      send(res, 403, { message: "Forbidden" });
+      return;
+    }
+
+    const state = (db.workspaceStates ?? []).find(
+      (entry) => entry.accountId === accountId && entry.workspaceId === workspaceId
+    );
+
+    send(res, 200, {
+      state: state?.payload ?? null,
+      updatedAt: state?.updatedAt ?? null,
+    });
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/workspace-state" && req.method === "PUT") {
+    const body = await readBody(req);
+    const accountId = normalizeText(body.accountId);
+    const workspaceId = normalizeText(body.workspaceId);
+    const requesterUserId = normalizeText(body.requesterUserId);
+    const payload = body.payload;
+
+    if (!accountId || !workspaceId || !requesterUserId || !payload || typeof payload !== "object") {
+      send(res, 400, { message: "Липсват валидни данни за синхронизация." });
+      return;
+    }
+
+    const db = ensureDbShape(await readDb());
+    const account = db.accounts.find((item) => item.id === accountId);
+    if (!account) {
+      send(res, 404, { message: "Фирмата не е намерена." });
+      return;
+    }
+
+    if (!isAccountMember(db, account, requesterUserId)) {
+      send(res, 403, { message: "Forbidden" });
+      return;
+    }
+
+    const now = Date.now();
+    const nextState = {
+      id: `workspace-state-${accountId}-${workspaceId}`,
+      accountId,
+      workspaceId,
+      updatedBy: requesterUserId,
+      updatedAt: now,
+      payload,
+    };
+
+    db.workspaceStates = (db.workspaceStates ?? []).filter(
+      (entry) => !(entry.accountId === accountId && entry.workspaceId === workspaceId)
+    );
+    db.workspaceStates.unshift(nextState);
+
+    await writeDb(db);
+    send(res, 200, { ok: true, updatedAt: now });
     return;
   }
 
