@@ -824,26 +824,42 @@ const syncInvitesFromApi = async () => {
     return;
   }
 
-  const params = new URLSearchParams();
-  if (user.accountId && hasManagementAccess()) {
-    params.set("accountId", user.accountId);
-    params.set("requesterUserId", user.id);
-  }
-  if (user.email) {
-    params.set("email", normalizeEmail(user.email));
-  }
+  const mergedInvites = new Map();
+
+  const inboxParams = new URLSearchParams();
   if (user.id) {
-    params.set("userId", user.id);
+    inboxParams.set("userId", user.id);
+  } else if (user.email) {
+    inboxParams.set("email", normalizeEmail(user.email));
   }
 
-  if (!params.toString()) {
-    return;
+  if (inboxParams.toString()) {
+    const inboxResult = await apiRequest(`/api/invites/inbox?${inboxParams.toString()}`);
+    if (inboxResult?.ok && Array.isArray(inboxResult.data?.invites)) {
+      inboxResult.data.invites.forEach((invite) => {
+        if (invite?.id) {
+          mergedInvites.set(invite.id, invite);
+        }
+      });
+    }
   }
 
-  const apiResult = await apiRequest(`/api/invites?${params.toString()}`);
-  if (apiResult?.ok && Array.isArray(apiResult.data?.invites)) {
-    saveInvites(apiResult.data.invites);
+  if (user.accountId && hasManagementAccess()) {
+    const accountParams = new URLSearchParams();
+    accountParams.set("accountId", user.accountId);
+    accountParams.set("requesterUserId", user.id);
+
+    const accountResult = await apiRequest(`/api/invites?${accountParams.toString()}`);
+    if (accountResult?.ok && Array.isArray(accountResult.data?.invites)) {
+      accountResult.data.invites.forEach((invite) => {
+        if (invite?.id) {
+          mergedInvites.set(invite.id, invite);
+        }
+      });
+    }
   }
+
+  saveInvites(Array.from(mergedInvites.values()));
 };
 
 const hashPassword = async (password) => {
