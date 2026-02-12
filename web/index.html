@@ -257,8 +257,8 @@
               <h3>Pending invites <span class="nav-badge nav-badge--inline" id="pending-invites-count">0</span></h3>
               <form class="panel-form" id="invite-form">
                 <label>
-                  Имейл
-                  <input type="email" name="email" placeholder="name@company.com" required />
+                  Имейл или потребителско ID
+                  <input type="text" name="inviteTarget" placeholder="name@company.com или user-123" required />
                 </label>
                 <label>
                   Роля
@@ -276,6 +276,12 @@
                 <div class="invite-share__row">
                   <a id="invite-share-link" href="#" target="_blank" rel="noopener noreferrer"></a>
                   <button type="button" class="ghost" id="invite-copy-link">Копирай</button>
+                  <button type="button" class="ghost" id="invite-share-native">Сподели</button>
+                </div>
+                <div class="invite-share__social">
+                  <a id="invite-share-whatsapp" href="#" target="_blank" rel="noopener noreferrer">WhatsApp</a>
+                  <a id="invite-share-facebook" href="#" target="_blank" rel="noopener noreferrer">Facebook</a>
+                  <a id="invite-share-telegram" href="#" target="_blank" rel="noopener noreferrer">Telegram</a>
                 </div>
               </div>
             </div>
