@@ -192,6 +192,25 @@ const ensureDbShape = (db) => {
   db.accounts ??= [];
   db.verificationTokens ??= [];
   db.invites ??= [];
+  db.notifications ??= [];
+
+  db.accounts = db.accounts.map((account) => {
+    const ownerUserId = account.ownerUserId ?? null;
+    const workspaces = Array.isArray(account.workspaces) && account.workspaces.length > 0
+      ? account.workspaces
+      : [{ id: `workspace-${Date.now()}`, name: "Основно пространство", description: "Главно работно пространство", ownerUserId, memberRoles: ownerUserId ? [{ userId: ownerUserId, role: "Owner" }] : [] }];
+
+    return {
+      ...account,
+      createdAt: account.createdAt ?? Date.now(),
+      status: ["active", "suspended"].includes(account.status) ? account.status : "active",
+      plan: ["Free", "Pro", "Team"].includes(account.plan) ? account.plan : "Free",
+      workspaces,
+      teams: Array.isArray(account.teams) ? account.teams : [],
+      members: Array.isArray(account.members) ? account.members : [],
+    };
+  });
+
   return db;
 };
 
@@ -317,6 +336,10 @@ const server = createServer(async (req, res) => {
         id: accountId,
         name: companyName,
         ownerUserId: null,
+        plan: "Free",
+        status: "active",
+        createdAt: Date.now(),
+        workspaces: [{ id: `workspace-${Date.now()}`, name: "Основно пространство", description: "Главно работно пространство", ownerUserId: null, memberRoles: [] }],
         teams: [
           { id: `team-${Date.now()}-1`, name: "Продуктов екип" },
           { id: `team-${Date.now()}-2`, name: "Инженерен екип" },
@@ -352,6 +375,15 @@ const server = createServer(async (req, res) => {
       if (!invite) {
         nextAccount.ownerUserId = newUser.id;
       }
+
+      nextAccount.workspaces = (nextAccount.workspaces ?? []).map((workspace) => ({
+        ...workspace,
+        ownerUserId: !invite ? newUser.id : (workspace.ownerUserId ?? nextAccount.ownerUserId ?? null),
+        memberRoles: [
+          ...(workspace.memberRoles ?? []).filter((member) => member.userId !== newUser.id),
+          { userId: newUser.id, role: invite?.role ?? (!invite ? "Owner" : "Member") },
+        ],
+      }));
 
       return nextAccount;
     });

@@ -54,6 +54,10 @@ const teamCreateModal = document.getElementById("team-create-modal");
 const memberCreateModal = document.getElementById("member-create-modal");
 const closeTeamCreateModalButton = document.getElementById("close-team-create-modal");
 const closeMemberCreateModalButton = document.getElementById("close-member-create-modal");
+const listLimitModal = document.getElementById("list-limit-modal");
+const listLimitForm = document.getElementById("list-limit-form");
+const closeListLimitModalButton = document.getElementById("close-list-limit-modal");
+const removeListLimitButton = document.getElementById("remove-list-limit");
 const calendarForm = document.getElementById("calendar-form");
 const calendarList = document.getElementById("calendar-list");
 const calendarGrid = document.getElementById("calendar-grid");
@@ -97,8 +101,15 @@ const menuDeleteBoardButton = document.getElementById("menu-delete-board");
 
 let boardSearchQuery = "";
 
+const ACCOUNT_PLANS = ["Free", "Pro", "Team"];
+const ACCOUNT_STATUSES = ["active", "suspended"];
+const BOARD_VISIBILITIES = ["private", "workspace", "public"];
+const WORKSPACE_ROLES = ["Owner", "Admin", "Member", "Viewer"];
+const CARD_PRIORITIES = ["low", "medium", "high", "urgent"];
+const CARD_STATUSES = ["todo", "in_progress", "review", "done"];
 
-const defaultBoards = [{ id: "board-default", name: "Основен борд", createdAt: Date.now() }];
+
+const defaultBoards = [{ id: "board-default", name: "Основен борд", createdAt: Date.now(), visibility: "workspace", createdBy: null, workspaceId: null, members: [], settings: { allowComments: true, allowAttachments: true, labelsEnabled: true } }];
 
 const defaultColumns = [
   { id: "backlog", title: "Backlog", color: "#5b6bff" },
@@ -166,6 +177,52 @@ const groupLabels = {
   marketing: "Маркетинг",
 };
 
+const normalizeRole = (role) => {
+  const normalized = normalizeText(role);
+  if (!normalized) {
+    return "Member";
+  }
+  const match = WORKSPACE_ROLES.find((entry) => entry.toLowerCase() === normalized.toLowerCase());
+  return match ?? "Member";
+};
+
+const createDefaultWorkspace = (ownerUserId = null) => ({
+  id: `workspace-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+  name: "Основно пространство",
+  description: "Главно работно пространство",
+  ownerUserId,
+  memberRoles: ownerUserId ? [{ userId: ownerUserId, role: "Owner" }] : [],
+});
+
+const normalizeAccount = (account, fallbackOwnerId = null) => {
+  const createdAt = account.createdAt ?? Date.now();
+  const ownerUserId = account.ownerUserId ?? fallbackOwnerId ?? null;
+  const rawWorkspaces = Array.isArray(account.workspaces) && account.workspaces.length > 0
+    ? account.workspaces
+    : [createDefaultWorkspace(ownerUserId)];
+
+  const workspaces = rawWorkspaces.map((workspace) => ({
+    id: workspace.id ?? `workspace-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+    name: workspace.name ?? "Основно пространство",
+    description: workspace.description ?? "",
+    ownerUserId: workspace.ownerUserId ?? ownerUserId,
+    memberRoles: Array.isArray(workspace.memberRoles)
+      ? workspace.memberRoles.map((member) => ({ userId: member.userId, role: normalizeRole(member.role) }))
+      : [],
+  }));
+
+  return {
+    ...account,
+    ownerUserId,
+    createdAt,
+    plan: ACCOUNT_PLANS.includes(account.plan) ? account.plan : "Free",
+    status: ACCOUNT_STATUSES.includes(account.status) ? account.status : "active",
+    workspaces,
+    teams: Array.isArray(account.teams) ? account.teams : [],
+    members: Array.isArray(account.members) ? account.members : [],
+  };
+};
+
 const loadPreferences = () => {
   const defaults = {
     weekStartDay: "monday",
@@ -196,24 +253,68 @@ const applyBoardFilterVisibility = () => {
 };
 
 
+
+const getCurrentWorkspace = () => {
+  const account = getCurrentAccount();
+  if (!account) {
+    return null;
+  }
+  return account.workspaces?.[0] ?? null;
+};
+
+const normalizeBoard = (board) => {
+  const currentUser = loadCurrentUser();
+  const workspace = getCurrentWorkspace();
+  const members = Array.isArray(board.members) ? board.members : [];
+  return {
+    ...board,
+    visibility: BOARD_VISIBILITIES.includes(board.visibility) ? board.visibility : "workspace",
+    createdBy: board.createdBy ?? currentUser?.id ?? null,
+    workspaceId: board.workspaceId ?? workspace?.id ?? null,
+    members,
+    settings: {
+      allowComments: board.settings?.allowComments ?? true,
+      allowAttachments: board.settings?.allowAttachments ?? true,
+      labelsEnabled: board.settings?.labelsEnabled ?? true,
+    },
+  };
+};
+
 const loadBoards = () => {
   const stored = localStorage.getItem("teamio-boards");
+  const workspace = getCurrentWorkspace();
   if (!stored) {
-    localStorage.setItem("teamio-boards", JSON.stringify(defaultBoards));
-    localStorage.setItem("teamio-current-board", defaultBoards[0].id);
-    return [...defaultBoards];
+    const seeded = defaultBoards.map((board) => normalizeBoard({ ...board, workspaceId: workspace?.id ?? null }));
+    localStorage.setItem("teamio-boards", JSON.stringify(seeded));
+    localStorage.setItem("teamio-current-board", seeded[0].id);
+    return seeded;
   }
   const boards = JSON.parse(stored);
   if (!Array.isArray(boards) || boards.length === 0) {
-    localStorage.setItem("teamio-boards", JSON.stringify(defaultBoards));
-    localStorage.setItem("teamio-current-board", defaultBoards[0].id);
-    return [...defaultBoards];
+    const seeded = defaultBoards.map((board) => normalizeBoard({ ...board, workspaceId: workspace?.id ?? null }));
+    localStorage.setItem("teamio-boards", JSON.stringify(seeded));
+    localStorage.setItem("teamio-current-board", seeded[0].id);
+    return seeded;
   }
-  return boards;
+  const normalized = boards.map((board) => normalizeBoard(board));
+  localStorage.setItem("teamio-boards", JSON.stringify(normalized));
+  if (!workspace?.id) {
+    return normalized;
+  }
+  const workspaceBoards = normalized.filter((board) => !board.workspaceId || board.workspaceId === workspace.id);
+  return workspaceBoards.length > 0 ? workspaceBoards : normalized;
 };
 
 const saveBoards = (boards) => {
-  localStorage.setItem("teamio-boards", JSON.stringify(boards));
+  const workspace = getCurrentWorkspace();
+  const existing = JSON.parse(localStorage.getItem("teamio-boards") ?? "[]");
+  const safeBoards = boards.map((board) => normalizeBoard(board));
+  if (!workspace?.id || !Array.isArray(existing)) {
+    localStorage.setItem("teamio-boards", JSON.stringify(safeBoards));
+    return;
+  }
+  const preserved = existing.filter((board) => board.workspaceId && board.workspaceId !== workspace.id);
+  localStorage.setItem("teamio-boards", JSON.stringify([...preserved, ...safeBoards]));
 };
 
 const getCurrentBoardId = () => {
@@ -284,14 +385,23 @@ const saveAllColumns = (columns) => {
 };
 
 const createDefaultColumnsForBoard = (boardId) =>
-  defaultColumns.map((column) => ({ ...column, id: `${column.id}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`, boardId }));
+  defaultColumns.map((column) => ({ ...column, id: `${column.id}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`, boardId, wipLimit: null }));
+
+const normalizeColumn = (column, currentBoardId) => {
+  const parsedLimit = Number.parseInt(column.wipLimit, 10);
+  return {
+    ...column,
+    boardId: column.boardId ?? currentBoardId,
+    wipLimit: Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : null,
+  };
+};
 
 const loadColumns = () => {
   const currentBoardId = getCurrentBoardId();
   const allColumns = loadAllColumns();
   const boardColumns = allColumns.filter((column) => column.boardId === currentBoardId || !column.boardId);
   if (boardColumns.length > 0) {
-    const normalized = boardColumns.map((column) => ({ ...column, boardId: currentBoardId }));
+    const normalized = boardColumns.map((column) => normalizeColumn(column, currentBoardId));
     const otherColumns = allColumns.filter((column) => column.boardId && column.boardId !== currentBoardId);
     saveAllColumns([...otherColumns, ...normalized]);
     return normalized;
@@ -304,7 +414,7 @@ const loadColumns = () => {
 const saveColumns = (columns) => {
   const currentBoardId = getCurrentBoardId();
   const allColumns = loadAllColumns().filter((column) => column.boardId !== currentBoardId);
-  saveAllColumns([...allColumns, ...columns.map((column) => ({ ...column, boardId: currentBoardId }))]);
+  saveAllColumns([...allColumns, ...columns.map((column) => normalizeColumn(column, currentBoardId))]);
 };
 
 const loadUsers = () => JSON.parse(localStorage.getItem("teamio-users") ?? "[]");
@@ -313,7 +423,15 @@ const saveUsers = (users) => {
   localStorage.setItem("teamio-users", JSON.stringify(users));
 };
 
-const loadAccounts = () => JSON.parse(localStorage.getItem("teamio-accounts") ?? "[]");
+const loadAccounts = () => {
+  const parsed = JSON.parse(localStorage.getItem("teamio-accounts") ?? "[]");
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+  const normalized = parsed.map((account) => normalizeAccount(account));
+  localStorage.setItem("teamio-accounts", JSON.stringify(normalized));
+  return normalized;
+};
 
 const saveAccounts = (accounts) => {
   localStorage.setItem("teamio-accounts", JSON.stringify(accounts));
@@ -347,15 +465,19 @@ const ensureAccountForUser = (user) => {
   }
 
   const accountId = existingUser.accountId ?? `account-${Date.now()}`;
-  const nextAccount = {
+  const nextAccount = normalizeAccount({
     id: accountId,
     name: "Моята фирма",
+    ownerUserId: existingUser.id,
+    plan: "Free",
+    status: "active",
+    createdAt: Date.now(),
     teams: [
       { id: `team-${Date.now()}-1`, name: "Общ екип" },
       { id: `team-${Date.now()}-2`, name: "Оперативен екип" },
     ],
-    members: [],
-  };
+    members: [{ id: existingUser.id, userId: existingUser.id, name: existingUser.name, email: existingUser.email, role: "Owner", teamIds: [] }],
+  }, existingUser.id);
 
   saveAccounts([...accounts, nextAccount]);
 
@@ -438,7 +560,7 @@ const getInviteTokenFromUrl = () => {
   return normalizeText(params.get("invite") ?? "");
 };
 
-const hasManagementAccess = () => {
+const hasPermission = (scope, action) => {
   const currentUser = loadCurrentUser();
   const account = getCurrentAccount();
   if (!currentUser) {
@@ -449,9 +571,19 @@ const hasManagementAccess = () => {
     return true;
   }
 
-  const role = normalizeText(currentUser.role ?? "").toLowerCase();
-  return ["admin", "owner", "администратор", "собственик"].some((keyword) => role.includes(keyword));
+  const normalizedRole = normalizeRole(currentUser.role ?? "Member");
+  const matrix = {
+    Account: { billing: ["Owner"], delete: ["Owner"] },
+    Workspace: { members: ["Owner", "Admin"], boards: ["Owner", "Admin"] },
+    Board: { lists: ["Owner", "Admin", "Member"], cards: ["Owner", "Admin", "Member"] },
+    Card: { edit: ["Owner", "Admin", "Member"], assign: ["Owner", "Admin", "Member"], comment: ["Owner", "Admin", "Member", "Viewer"] },
+  };
+
+  const allowedRoles = matrix[scope]?.[action] ?? [];
+  return allowedRoles.includes(normalizedRole);
 };
+
+const hasManagementAccess = () => hasPermission("Workspace", "members") || hasPermission("Workspace", "boards");
 
 const applyManagementAccessUi = () => {
   const hasAccess = hasManagementAccess();
@@ -887,6 +1019,16 @@ const loadTasks = () => {
       ...task,
       boardId: currentBoardId,
       column: getNormalizedColumnId(task.column, boardColumns),
+      listId: getNormalizedColumnId(task.column, boardColumns),
+      status: task.completed ? "done" : "todo",
+      priority: "medium",
+      assignedUserIds: [],
+      labels: [],
+      checklists: [],
+      attachments: [],
+      comments: [],
+      activityLog: [],
+      createdBy: loadCurrentUser()?.id ?? null,
     }));
     localStorage.setItem("teamio-tasks", JSON.stringify(seeded));
     return seeded;
@@ -906,6 +1048,15 @@ const loadTasks = () => {
       boardId: taskBoardId,
       level: task.level ?? "L2",
       completed: Boolean(task.completed),
+      status: CARD_STATUSES.includes(task.status) ? task.status : (Boolean(task.completed) ? "done" : "todo"),
+      priority: CARD_PRIORITIES.includes(task.priority) ? task.priority : "medium",
+      listId: task.listId ?? normalizedColumn,
+      assignedUserIds: Array.isArray(task.assignedUserIds) ? task.assignedUserIds : [],
+      labels: Array.isArray(task.labels) ? task.labels : [],
+      checklists: Array.isArray(task.checklists) ? task.checklists : [],
+      attachments: Array.isArray(task.attachments) ? task.attachments : [],
+      comments: Array.isArray(task.comments) ? task.comments : [],
+      activityLog: Array.isArray(task.activityLog) ? task.activityLog : [],
     };
   });
 
@@ -1030,7 +1181,12 @@ const renderBoard = (tasks) => {
     const columnTasks = filteredTasks
       .filter((task) => task.column === column.id)
       .sort((a, b) => (levelOrder[a.level ?? "L2"] ?? 2) - (levelOrder[b.level ?? "L2"] ?? 2));
-    count.textContent = `${columnTasks.length} задачи`;
+    const hasLimit = Number.isInteger(column.wipLimit) && column.wipLimit > 0;
+    const isOverLimit = hasLimit && columnTasks.length > column.wipLimit;
+    count.textContent = hasLimit ? `${columnTasks.length}/${column.wipLimit}` : `${columnTasks.length} задачи`;
+    count.classList.toggle("column__count--limit", hasLimit);
+    count.classList.toggle("column__count--over", isOverLimit);
+    columnEl.classList.toggle("column--limit-over", isOverLimit);
 
     const actions = document.createElement("div");
     actions.className = "column__actions";
@@ -1062,7 +1218,21 @@ const renderBoard = (tasks) => {
       renderBoard(getVisibleTasks());
     });
 
-    actions.append(count, dragButton, renameButton);
+    const limitButton = document.createElement("button");
+    limitButton.type = "button";
+    limitButton.className = "column__limit";
+    limitButton.textContent = hasLimit ? "Промени лимит" : "WIP лимит";
+    limitButton.title = "Максимален брой карти в колоната";
+    limitButton.addEventListener("click", () => {
+      if (!listLimitForm || !listLimitModal) {
+        return;
+      }
+      listLimitForm.querySelector('input[name="columnId"]').value = column.id;
+      listLimitForm.querySelector('input[name="wipLimit"]').value = hasLimit ? column.wipLimit.toString() : "";
+      openModal(listLimitModal);
+    });
+
+    actions.append(count, dragButton, renameButton, limitButton);
     header.append(titleWrap, actions);
     columnEl.append(header);
 
@@ -1109,7 +1279,7 @@ const renderBoard = (tasks) => {
         return;
       }
       const allTasks = loadTasks();
-      const updated = allTasks.map((task) => (task.id === taskId ? { ...task, column: column.id } : task));
+      const updated = allTasks.map((task) => (task.id === taskId ? { ...task, column: column.id, listId: column.id } : task));
       saveTasks(updated);
       renderBoard(getVisibleTasks());
       renderCalendar();
@@ -1127,6 +1297,24 @@ const renderBoard = (tasks) => {
   });
 
   updateReports();
+};
+
+const loadNotifications = () => JSON.parse(localStorage.getItem("teamio-notifications") ?? "[]");
+
+const saveNotifications = (items) => {
+  localStorage.setItem("teamio-notifications", JSON.stringify(items));
+};
+
+const pushNotification = (notification) => {
+  const items = loadNotifications();
+  items.unshift({
+    id: notification.id ?? `notif-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
+    createdAt: notification.createdAt ?? Date.now(),
+    readAt: notification.readAt ?? null,
+    type: notification.type ?? "generic",
+    ...notification,
+  });
+  saveNotifications(items.slice(0, 300));
 };
 
 const loadInvites = () => JSON.parse(localStorage.getItem("teamio-invites") ?? "[]");
@@ -1671,6 +1859,7 @@ newColumnButton.addEventListener("click", () => {
     id: `column-${Date.now()}`,
     title: name.trim(),
     color: nextColor,
+    wipLimit: null,
   };
   const updated = [...columns, newColumn];
   saveColumns(updated);
@@ -1734,6 +1923,51 @@ closeTeamCreateModalButton?.addEventListener("click", () => {
 closeMemberCreateModalButton?.addEventListener("click", () => {
   closeModal(memberCreateModal);
 });
+
+
+closeListLimitModalButton?.addEventListener("click", () => {
+  closeModal(listLimitModal);
+});
+
+removeListLimitButton?.addEventListener("click", () => {
+  if (!listLimitForm) {
+    return;
+  }
+  const columnId = listLimitForm.querySelector('input[name="columnId"]')?.value;
+  if (!columnId) {
+    closeModal(listLimitModal);
+    return;
+  }
+  const columns = loadColumns();
+  const updated = columns.map((column) => (column.id === columnId ? { ...column, wipLimit: null } : column));
+  saveColumns(updated);
+  closeModal(listLimitModal);
+  renderBoard(getVisibleTasks());
+});
+
+listLimitForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const formData = new FormData(listLimitForm);
+  const columnId = formData.get("columnId")?.toString();
+  const rawLimit = formData.get("wipLimit")?.toString().trim() ?? "";
+  if (!columnId) {
+    return;
+  }
+  const parsedLimit = Number.parseInt(rawLimit, 10);
+  const nextLimit = Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : null;
+  const columns = loadColumns();
+  const updated = columns.map((column) => (column.id === columnId ? { ...column, wipLimit: nextLimit } : column));
+  saveColumns(updated);
+  closeModal(listLimitModal);
+  renderBoard(getVisibleTasks());
+});
+
+listLimitModal?.addEventListener("click", (event) => {
+  if (event.target === listLimitModal) {
+    closeModal(listLimitModal);
+  }
+});
+
 
 teamCreateModal?.addEventListener("click", (event) => {
   if (event.target === teamCreateModal) {
@@ -1962,6 +2196,11 @@ taskDetailsForm?.addEventListener("submit", (event) => {
           due: formData.get("due")?.toString() ?? "",
           level: formData.get("level")?.toString() ?? "L2",
           completed: formData.get("completed") === "on",
+          status: formData.get("completed") === "on" ? "done" : (task.status ?? "todo"),
+          activityLog: [
+            ...(task.activityLog ?? []),
+            { id: `activity-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`, type: "card_updated", userId: loadCurrentUser()?.id ?? null, createdAt: Date.now() },
+          ],
         }
       : task
   );
@@ -2119,7 +2358,20 @@ createBoardButton?.addEventListener("click", () => {
   }
   const boards = loadBoards();
   const boardId = `board-${Date.now()}`;
-  boards.push({ id: boardId, name: name.trim(), createdAt: Date.now() });
+  const workspace = getCurrentWorkspace();
+  const currentUser = loadCurrentUser();
+  boards.push(
+    normalizeBoard({
+      id: boardId,
+      name: name.trim(),
+      createdAt: Date.now(),
+      visibility: "workspace",
+      createdBy: currentUser?.id ?? null,
+      workspaceId: workspace?.id ?? null,
+      members: currentUser?.id ? [currentUser.id] : [],
+      settings: { allowComments: true, allowAttachments: true, labelsEnabled: true },
+    })
+  );
   saveBoards(boards);
   setCurrentBoardId(boardId);
   const allColumns = loadAllColumns();
@@ -2246,6 +2498,14 @@ inviteForm?.addEventListener("submit", async (event) => {
     inviteShareLink.textContent = inviteLink;
   }
 
+  pushNotification({
+    type: "board_invite",
+    accountId: account.id,
+    boardId: getCurrentBoardId(),
+    email,
+    role,
+    message: `Изпратена е покана към ${email}`,
+  });
   setAuthMessage("Поканата е създадена успешно.");
   renderInvites();
   renderMyInvites();
@@ -2306,14 +2566,26 @@ formEl.addEventListener("submit", (event) => {
     return;
   }
   const tasks = loadTasks();
+  const cardColumn = formData.get("column").toString();
+  const now = Date.now();
   const newTask = {
-    id: `task-${Date.now()}`,
+    id: `task-${now}`,
     title: formData.get("title").toString(),
     description: formData.get("description").toString(),
     due: formData.get("due").toString(),
-    column: formData.get("column").toString(),
+    column: cardColumn,
+    listId: cardColumn,
     tag: "Ново",
     level: formData.get("level")?.toString() ?? "L2",
+    priority: "medium",
+    status: "todo",
+    createdBy: currentUser?.id ?? null,
+    assignedUserIds: [],
+    labels: [],
+    checklists: [],
+    attachments: [],
+    comments: [],
+    activityLog: [{ id: `activity-${now}`, type: "card_created", userId: currentUser?.id ?? null, createdAt: now }],
     teamIds: selectedTeamIds,
     accountId: currentUser?.accountId,
     boardId: getCurrentBoardId(),

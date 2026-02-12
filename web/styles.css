@@ -632,6 +632,36 @@ body {
   cursor: pointer;
 }
 
+
+.column__count--limit {
+  font-weight: 700;
+}
+
+.column__count--over {
+  background: rgba(215, 54, 54, 0.16);
+  color: #9f1f1f;
+}
+
+.column--limit-over {
+  border-color: rgba(215, 54, 54, 0.5);
+  box-shadow: 0 16px 28px rgba(127, 24, 24, 0.2);
+}
+
+.column__limit {
+  border: none;
+  background: rgba(43, 184, 161, 0.16);
+  color: #0f6f60;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.column__limit:hover {
+  background: rgba(43, 184, 161, 0.26);
+}
+
 .card {
   background: #fff;
   border-radius: 16px;
