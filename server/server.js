@@ -482,14 +482,19 @@ const server = createServer(async (req, res) => {
         nextAccount.ownerUserId = newUser.id;
       }
 
-      nextAccount.workspaces = (nextAccount.workspaces ?? []).map((workspace) => ({
-        ...workspace,
-        ownerUserId: !invite ? newUser.id : (workspace.ownerUserId ?? nextAccount.ownerUserId ?? null),
-        memberRoles: [
-          ...(workspace.memberRoles ?? []).filter((member) => member.userId !== newUser.id),
-          { userId: newUser.id, role: invite?.role ?? (!invite ? "Owner" : "Member") },
-        ],
-      }));
+      nextAccount.workspaces = (nextAccount.workspaces ?? []).map((workspace) => {
+        const shouldGrantWorkspaceRole = !invite || !invite.workspaceId || workspace.id === invite.workspaceId;
+        return {
+          ...workspace,
+          ownerUserId: !invite ? newUser.id : (workspace.ownerUserId ?? nextAccount.ownerUserId ?? null),
+          memberRoles: shouldGrantWorkspaceRole
+            ? [
+                ...(workspace.memberRoles ?? []).filter((member) => member.userId !== newUser.id),
+                { userId: newUser.id, role: invite?.role ?? (!invite ? "Owner" : "Member") },
+              ]
+            : (workspace.memberRoles ?? []),
+        };
+      });
 
       return nextAccount;
     });
@@ -766,12 +771,25 @@ const server = createServer(async (req, res) => {
       }
     }
 
-    const invites = db.invites.filter((invite) => {
-      const byAccount = canReadAccountInvites ? invite.accountId === accountId : false;
-      const byEmail = email ? normalizeEmail(invite.email) === email : false;
-      const byInvitedUser = userId ? invite.invitedUserId === userId : false;
-      return byAccount || byEmail || byInvitedUser;
-    });
+    const invites = db.invites
+      .filter((invite) => {
+        const byAccount = canReadAccountInvites ? invite.accountId === accountId : false;
+        const byEmail = email ? normalizeEmail(invite.email) === email : false;
+        const byInvitedUser = userId ? invite.invitedUserId === userId : false;
+        return byAccount || byEmail || byInvitedUser;
+      })
+      .map((invite) => {
+        const account = db.accounts.find((entry) => entry.id === invite.accountId);
+        const invitedByUser = db.users.find((entry) => entry.id === invite.invitedByUserId);
+        const workspace = (account?.workspaces ?? []).find((entry) => entry.id === invite.workspaceId);
+        return {
+          ...invite,
+          accountName: account?.name ?? null,
+          invitedByName: invitedByUser?.name ?? invitedByUser?.email ?? null,
+          workspaceName: workspace?.name ?? null,
+          boardName: normalizeText(invite.boardName ?? "") || null,
+        };
+      });
 
     send(res, 200, { invites });
     return;
@@ -783,6 +801,9 @@ const server = createServer(async (req, res) => {
     const invitedByUserId = normalizeText(body.invitedByUserId);
     const email = normalizeEmail(body.email);
     const role = normalizeWorkspaceRole(body.role || "Member");
+    const workspaceId = normalizeText(body.workspaceId);
+    const boardId = normalizeText(body.boardId);
+    const boardName = normalizeText(body.boardName);
 
     if (!accountId || !email) {
       send(res, 400, { message: "Липсват данни за покана." });
@@ -801,7 +822,27 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (workspaceId && !(account.workspaces ?? []).some((workspace) => workspace.id === workspaceId)) {
+      send(res, 400, { message: "Невалидно workspace за поканата." });
+      return;
+    }
+
     const existingUser = db.users.find((item) => normalizeEmail(item.email) === email) ?? null;
+    const now = Date.now();
+
+    db.invites = db.invites.map((item) => {
+      const sameTarget = item.accountId === accountId && normalizeEmail(item.email) === email;
+      const isActive = !item.acceptedAt && !item.declinedAt && !item.revokedAt && item.expiresAt > now;
+      if (sameTarget && isActive) {
+        return {
+          ...item,
+          revokedAt: now,
+          revokedByUserId: invitedByUserId || null,
+          revokedReason: "replaced",
+        };
+      }
+      return item;
+    });
 
     const invite = {
       id: `invite-${Date.now()}`,
@@ -810,6 +851,9 @@ const server = createServer(async (req, res) => {
       invitedUserId: existingUser?.id ?? null,
       email,
       role,
+      workspaceId: workspaceId || null,
+      boardId: boardId || null,
+      boardName: boardName || null,
       delivery: existingUser ? "internal" : "email",
       token: randomBytes(16).toString("hex"),
       expiresAt: Date.now() + 48 * 60 * 60 * 1000,
@@ -822,10 +866,11 @@ const server = createServer(async (req, res) => {
     db.invites.unshift(invite);
     await writeDb(db);
 
+    let deliveryReport = null;
     if (!existingUser) {
       try {
         const inviteLink = `${getPublicBaseUrl(req)}/?invite=${invite.token}`;
-        await sendEmail({
+        deliveryReport = await sendEmail({
           to: email,
           subject: `Покана за достъп до ${account.name ?? "Teamio"}`,
           text: `Получаваш покана за Teamio. Отвори линка: ${inviteLink}`,
@@ -833,6 +878,7 @@ const server = createServer(async (req, res) => {
         });
       } catch (error) {
         console.error("[Teamio] Грешка при изпращане на invite имейл:", error);
+        deliveryReport = { delivered: false, mode: "error", reason: error?.message || "Грешка при изпращане." };
       }
     }
 
@@ -840,7 +886,54 @@ const server = createServer(async (req, res) => {
       invite,
       delivery: invite.delivery,
       existingUserId: existingUser?.id ?? null,
+      deliveryReport,
     });
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/invites/revoke" && req.method === "POST") {
+    const body = await readBody(req);
+    const inviteId = normalizeText(body.inviteId);
+    const accountId = normalizeText(body.accountId);
+    const requesterUserId = normalizeText(body.requesterUserId);
+
+    if (!inviteId || !accountId || !requesterUserId) {
+      send(res, 400, { message: "Липсват данни за отмяна на поканата." });
+      return;
+    }
+
+    const db = ensureDbShape(await readDb());
+    const account = db.accounts.find((item) => item.id === accountId);
+    if (!account) {
+      send(res, 404, { message: "Фирмата не е намерена." });
+      return;
+    }
+
+    if (!canManageMembers(db, account, requesterUserId)) {
+      send(res, 403, { message: "Forbidden" });
+      return;
+    }
+
+    const invite = db.invites.find((item) => item.id === inviteId && item.accountId === accountId);
+    if (!invite) {
+      send(res, 404, { message: "Поканата не е намерена." });
+      return;
+    }
+
+    if (invite.acceptedAt || invite.declinedAt || invite.revokedAt || invite.expiresAt < Date.now()) {
+      send(res, 409, { message: "Поканата не е активна." });
+      return;
+    }
+
+    const now = Date.now();
+    db.invites = db.invites.map((item) =>
+      item.id === inviteId
+        ? { ...item, revokedAt: now, revokedByUserId: requesterUserId, revokedReason: "manual" }
+        : item
+    );
+    await writeDb(db);
+
+    send(res, 200, { invite: db.invites.find((item) => item.id === inviteId) ?? null });
     return;
   }
 
@@ -893,6 +986,96 @@ const server = createServer(async (req, res) => {
       pendingInvites,
       acceptedMembers: members,
     });
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/accounts/members/remove" && req.method === "POST") {
+    const body = await readBody(req);
+    const accountId = normalizeText(body.accountId);
+    const requesterUserId = normalizeText(body.requesterUserId);
+    const memberUserId = normalizeText(body.memberUserId);
+    const memberEmail = normalizeEmail(body.memberEmail);
+
+    if (!accountId || !requesterUserId || (!memberUserId && !memberEmail)) {
+      send(res, 400, { message: "Липсват данни за премахване на достъп." });
+      return;
+    }
+
+    const db = ensureDbShape(await readDb());
+    const account = db.accounts.find((item) => item.id === accountId);
+    if (!account) {
+      send(res, 404, { message: "Фирмата не е намерена." });
+      return;
+    }
+
+    if (!isAccountOwner(account, requesterUserId)) {
+      send(res, 403, { message: "Само собственикът може да премахва достъп." });
+      return;
+    }
+
+    if (memberUserId && memberUserId === account.ownerUserId) {
+      send(res, 409, { message: "Собственикът не може да премахне себе си." });
+      return;
+    }
+
+    const shouldRemoveMember = (member) => {
+      const currentUserId = member.userId ?? member.id ?? "";
+      const currentEmail = normalizeEmail(member.email ?? "");
+      return (memberUserId && currentUserId === memberUserId) || (memberEmail && currentEmail === memberEmail);
+    };
+
+    let removedUserId = memberUserId || null;
+    let removedEmail = memberEmail || "";
+    const targetMember = (account.members ?? []).find((member) => shouldRemoveMember(member));
+    if (!targetMember) {
+      send(res, 404, { message: "Членът не е намерен в тази фирма." });
+      return;
+    }
+
+    removedUserId = removedUserId || targetMember.userId || targetMember.id || null;
+    removedEmail = removedEmail || normalizeEmail(targetMember.email ?? "");
+
+    if (removedUserId && removedUserId === account.ownerUserId) {
+      send(res, 409, { message: "Собственикът не може да бъде премахнат." });
+      return;
+    }
+
+    const ownerEmail = normalizeEmail(db.users.find((user) => user.id === account.ownerUserId)?.email ?? "");
+    if (!removedUserId && removedEmail && ownerEmail && removedEmail === ownerEmail) {
+      send(res, 409, { message: "Собственикът не може да бъде премахнат." });
+      return;
+    }
+
+    db.accounts = db.accounts.map((entry) => {
+      if (entry.id !== accountId) {
+        return entry;
+      }
+
+      const nextMembers = (entry.members ?? []).filter((member) => !shouldRemoveMember(member));
+      const nextWorkspaces = (entry.workspaces ?? []).map((workspace) => ({
+        ...workspace,
+        memberRoles: (workspace.memberRoles ?? []).filter((member) => member.userId !== removedUserId),
+      }));
+
+      return {
+        ...entry,
+        members: nextMembers,
+        workspaces: nextWorkspaces,
+      };
+    });
+
+    db.users = db.users.map((user) => {
+      const emailMatches = removedEmail ? normalizeEmail(user.email) === removedEmail : false;
+      if ((removedUserId && user.id === removedUserId) || emailMatches) {
+        if (user.accountId === accountId) {
+          return { ...user, accountId: null };
+        }
+      }
+      return user;
+    });
+
+    await writeDb(db);
+    send(res, 200, { ok: true, removedUserId, removedEmail });
     return;
   }
 
@@ -1134,6 +1317,10 @@ const server = createServer(async (req, res) => {
             ];
 
         const nextWorkspaces = (account.workspaces ?? []).map((workspace) => {
+          const shouldGrantWorkspaceRole = !invite.workspaceId || workspace.id === invite.workspaceId;
+          if (!shouldGrantWorkspaceRole) {
+            return workspace;
+          }
           const existingWorkspaceMember = (workspace.memberRoles ?? []).find((member) => member.userId === userId);
           return {
             ...workspace,
