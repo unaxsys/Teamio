@@ -3043,9 +3043,8 @@ inviteForm?.addEventListener("submit", async (event) => {
       setAuthMessage("403 Forbidden: Нямаш право да изпращаш покани.");
       return;
     }
-    const invites = loadInvites();
-    invites.unshift(invite);
-    saveInvites(invites);
+    setAuthMessage(apiResult?.data?.message || "Поканата не беше изпратена. Провери връзката със сървъра.");
+    return;
   }
 
   inviteForm.reset();
