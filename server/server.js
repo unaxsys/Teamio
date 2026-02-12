@@ -358,6 +358,11 @@ const serveStaticFile = async (req, res, requestUrl) => {
     return false;
   }
 
+  const isApiPath = requestUrl.pathname === "/api" || requestUrl.pathname.startsWith("/api/");
+  if (isApiPath) {
+    return false;
+  }
+
   const requestedPath = resolveStaticPath(requestUrl.pathname);
   if (!requestedPath) {
     send(res, 403, { message: "Forbidden" });
@@ -1524,7 +1529,8 @@ const server = createServer(async (req, res) => {
     }
   }
 
-  if (!requestUrl.pathname.startsWith("/api/")) {
+  const isApiPath = requestUrl.pathname === "/api" || requestUrl.pathname.startsWith("/api/");
+  if (!isApiPath) {
     const servedStatic = await serveStaticFile(req, res, requestUrl);
     if (servedStatic) {
       return;
