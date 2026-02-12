@@ -483,19 +483,21 @@ const ensureAccountForUser = (user) => {
 
   const accounts = loadAccounts();
   const users = loadUsers();
-  const existingUser = users.find((item) => item.id === user.id) ?? user;
-  const existingAccount = existingUser.accountId ? accounts.find((account) => account.id === existingUser.accountId) : null;
+  const localUser = users.find((item) => item.id === user.id) ?? null;
+  const preferredAccountId = user.accountId || localUser?.accountId || null;
+  const existingUser = { ...(localUser ?? user), accountId: preferredAccountId };
+  const existingAccount = preferredAccountId ? accounts.find((account) => account.id === preferredAccountId) : null;
 
   if (existingAccount) {
-    if (user.accountId !== existingUser.accountId) {
-      const nextUser = { ...user, accountId: existingUser.accountId };
+    if (user.accountId !== preferredAccountId) {
+      const nextUser = { ...user, accountId: preferredAccountId };
       setCurrentUser(nextUser);
       return nextUser;
     }
     return user;
   }
 
-  const accountId = existingUser.accountId ?? `account-${Date.now()}`;
+  const accountId = preferredAccountId ?? `account-${Date.now()}`;
   const nextAccount = normalizeAccount({
     id: accountId,
     name: "Моята фирма",
@@ -3035,8 +3037,10 @@ inviteForm?.addEventListener("submit", async (event) => {
     }),
   });
 
+  let deliveryReport = null;
   if (apiResult?.ok && apiResult.data?.invite) {
     invite = apiResult.data.invite;
+    deliveryReport = apiResult.data.deliveryReport ?? null;
     await syncInvitesFromApi();
   } else {
     if (apiResult?.data?.message === "Forbidden") {
@@ -3067,7 +3071,13 @@ inviteForm?.addEventListener("submit", async (event) => {
     role,
     message: `Изпратена е покана към ${email}`,
   });
-  setAuthMessage(invite.delivery === "internal" ? "Поканата е изпратена вътрешно към регистрирания потребител." : "Поканата е създадена успешно.");
+  if (invite.delivery === "internal") {
+    setAuthMessage("Поканата е изпратена вътрешно към регистрирания потребител.");
+  } else if (deliveryReport && deliveryReport.delivered === false) {
+    setAuthMessage("Поканата е създадена, но имейлът не е изпратен автоматично. Използвай линка за ръчно споделяне.");
+  } else {
+    setAuthMessage("Поканата е създадена успешно.");
+  }
   renderInvites();
   renderMyInvites();
   renderMembersInvitesSummary();

@@ -847,10 +847,11 @@ const server = createServer(async (req, res) => {
     db.invites.unshift(invite);
     await writeDb(db);
 
+    let deliveryReport = null;
     if (!existingUser) {
       try {
         const inviteLink = `${getPublicBaseUrl(req)}/?invite=${invite.token}`;
-        await sendEmail({
+        deliveryReport = await sendEmail({
           to: email,
           subject: `Покана за достъп до ${account.name ?? "Teamio"}`,
           text: `Получаваш покана за Teamio. Отвори линка: ${inviteLink}`,
@@ -858,6 +859,7 @@ const server = createServer(async (req, res) => {
         });
       } catch (error) {
         console.error("[Teamio] Грешка при изпращане на invite имейл:", error);
+        deliveryReport = { delivered: false, mode: "error", reason: error?.message || "Грешка при изпращане." };
       }
     }
 
@@ -865,6 +867,7 @@ const server = createServer(async (req, res) => {
       invite,
       delivery: invite.delivery,
       existingUserId: existingUser?.id ?? null,
+      deliveryReport,
     });
     return;
   }
