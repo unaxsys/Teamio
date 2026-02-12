@@ -753,7 +753,8 @@ const applyWorkspaceSnapshot = (snapshot) => {
 let syncInProgress = false;
 let syncTimer = null;
 let syncDirty = false;
-let invitesPollTimer = null;
+let invitesSyncInFlight = false;
+let lastInvitesSyncKey = "";
 
 const pushWorkspaceState = async () => {
   const context = getSyncContext();
@@ -818,11 +819,27 @@ const persistAndSync = (key, value) => {
   scheduleWorkspaceSync();
 };
 
-const syncInvitesFromApi = async () => {
+const syncInvitesFromApi = async ({ force = false } = {}) => {
   const user = loadCurrentUser();
   if (!user) {
     return;
   }
+
+  const syncContextKey = [
+    user.id ?? "",
+    normalizeEmail(user.email ?? ""),
+    user.accountId ?? "",
+    hasManagementAccess() ? "manage" : "member",
+  ].join("|");
+
+  if (invitesSyncInFlight) {
+    return;
+  }
+  if (!force && syncContextKey === lastInvitesSyncKey) {
+    return;
+  }
+
+  invitesSyncInFlight = true;
 
   const existingInvites = loadInvites();
   const existingIncomingInvites = existingInvites.filter((invite) => invite?.__scope === "incoming");
@@ -839,38 +856,75 @@ const syncInvitesFromApi = async () => {
     myInvitesParams.set("email", normalizeEmail(user.email));
   }
 
-  if (myInvitesParams.toString()) {
-    const myInvitesResult = await apiRequest(`/api/invites/inbox?${myInvitesParams.toString()}`);
-    if (myInvitesResult?.ok && Array.isArray(myInvitesResult.data?.invites)) {
-      incomingInvites = myInvitesResult.data.invites
-        .filter((invite) => invite?.id)
-        .map((invite) => ({ ...invite, __scope: "incoming" }));
+  try {
+    if (myInvitesParams.toString()) {
+      const myInvitesResult = await apiRequest(`/api/invites/inbox?${myInvitesParams.toString()}`);
+      if (myInvitesResult?.ok && Array.isArray(myInvitesResult.data?.invites)) {
+        incomingInvites = myInvitesResult.data.invites
+          .filter((invite) => invite?.id)
+          .map((invite) => ({ ...invite, __scope: "incoming" }));
+      }
     }
-  }
 
-  if (user.accountId && hasManagementAccess()) {
-    const accountParams = new URLSearchParams();
-    accountParams.set("accountId", user.accountId);
-    accountParams.set("requesterUserId", user.id);
+    if (user.accountId && hasManagementAccess()) {
+      const accountParams = new URLSearchParams();
+      accountParams.set("accountId", user.accountId);
+      accountParams.set("requesterUserId", user.id);
 
-    const accountResult = await apiRequest(`/api/invites?${accountParams.toString()}`);
-    if (accountResult?.ok && Array.isArray(accountResult.data?.invites)) {
-      accountInvites = accountResult.data.invites
-        .filter((invite) => invite?.id)
-        .map((invite) => ({ ...invite, __scope: "account" }));
+      const accountResult = await apiRequest(`/api/invites?${accountParams.toString()}`);
+      if (accountResult?.ok && Array.isArray(accountResult.data?.invites)) {
+        accountInvites = accountResult.data.invites
+          .filter((invite) => invite?.id)
+          .map((invite) => ({ ...invite, __scope: "account" }));
+      }
+    } else {
+      accountInvites = [];
     }
-  } else {
-    accountInvites = [];
-  }
 
-  const mergedInvites = new Map();
-  [...accountInvites, ...incomingInvites].forEach((invite) => {
-    if (invite?.id) {
-      mergedInvites.set(invite.id, invite);
+    const mergedInvites = new Map();
+    [...accountInvites, ...incomingInvites].forEach((invite) => {
+      if (invite?.id) {
+        mergedInvites.set(invite.id, invite);
+      }
+    });
+
+    saveInvites(Array.from(mergedInvites.values()));
+    lastInvitesSyncKey = syncContextKey;
+  } finally {
+    invitesSyncInFlight = false;
+  }
+};
+
+const refreshInviteUi = async ({ force = false } = {}) => {
+  await syncInvitesFromApi({ force });
+  renderMyInvites();
+  renderMembersInvitesSummary();
+};
+
+const normalizeInviteFormFields = () => {
+  if (!inviteForm) {
+    return;
+  }
+  const duplicatedUserIdFields = inviteForm.querySelectorAll('input[name="invitedUserId"]');
+  duplicatedUserIdFields.forEach((field, index) => {
+    if (index === 0) {
+      return;
+    }
+    const label = field.closest("label");
+    if (label) {
+      label.remove();
+    } else {
+      field.remove();
     }
   });
+};
 
-  saveInvites(Array.from(mergedInvites.values()));
+const stopInvitesPolling = () => {
+  // no-op: polling е премахнат, за да не прави render/fetch loop
+};
+
+const startInvitesPolling = () => {
+  // no-op: refresh става само при mount/login и при връщане към таба
 };
 
 const refreshInviteUi = async () => {
@@ -1042,7 +1096,7 @@ const showApp = async (user) => {
   applyRoleBasedTabVisibility();
   renderBoardSelector();
   syncTeamSelectors();
-  await syncInvitesFromApi();
+  await syncInvitesFromApi({ force: true });
   renderBoard(getVisibleTasks());
   renderTeams();
   renderInvites();
@@ -1711,7 +1765,7 @@ const renderMembersInvitesSummary = async () => {
 
         if (apiResult?.ok) {
           setAuthMessage(`Поканата към ${invite.email} е отменена.`);
-          await syncInvitesFromApi();
+          await syncInvitesFromApi({ force: true });
           renderInvites();
           renderMyInvites();
           renderMembersInvitesSummary();
@@ -1767,7 +1821,7 @@ const renderMembersInvitesSummary = async () => {
 
           if (apiResult?.ok) {
             setAuthMessage(`Достъпът на ${member.email || member.name} е прекратен.`);
-            await syncInvitesFromApi();
+            await syncInvitesFromApi({ force: true });
             renderInvites();
             renderMyInvites();
             renderMembersInvitesSummary();
@@ -1848,7 +1902,7 @@ const renderMyInvites = () => {
         });
 
         if (apiResult?.ok) {
-          await syncInvitesFromApi();
+          await syncInvitesFromApi({ force: true });
         } else {
           const updatedInvites = loadInvites().map((entry) =>
             entry.id === invite.id
@@ -1894,7 +1948,7 @@ const renderMyInvites = () => {
         });
 
         if (apiResult?.ok) {
-          await syncInvitesFromApi();
+          await syncInvitesFromApi({ force: true });
         } else {
           const updatedInvites = loadInvites().map((entry) =>
             entry.id === invite.id
@@ -2889,7 +2943,7 @@ document.addEventListener("visibilitychange", () => {
   if (document.hidden || !loadCurrentUser()) {
     return;
   }
-  void refreshInviteUi();
+  void refreshInviteUi({ force: true });
 });
 
 
@@ -3150,7 +3204,7 @@ inviteForm?.addEventListener("submit", async (event) => {
   if (apiResult?.ok && apiResult.data?.invite) {
     invite = apiResult.data.invite;
     deliveryReport = apiResult.data.deliveryReport ?? null;
-    await syncInvitesFromApi();
+    await syncInvitesFromApi({ force: true });
   } else {
     if (apiResult?.data?.message === "Forbidden") {
       setAuthMessage("403 Forbidden: Нямаш право да изпращаш покани.");
