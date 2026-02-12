@@ -88,6 +88,14 @@ const doneByFlagCheckbox = document.getElementById("setting-done-by-flag");
 const showBoardFilterCheckbox = document.getElementById("setting-show-board-filter");
 const boardFilterPanel = document.getElementById("board-filter-panel");
 const doneCriteriaHelp = document.getElementById("done-criteria-help");
+const companyProfileForm = document.getElementById("company-profile-form");
+const settingsAccordion = document.getElementById("settings-accordion");
+const workspaceCompanyName = document.getElementById("workspace-company-name");
+const workspaceCompanyLogo = document.getElementById("workspace-company-logo");
+const workspaceCompanyDot = document.getElementById("workspace-company-dot");
+const workspaceCompanyChip = document.getElementById("workspace-company-chip");
+const workspaceCompanyChipLogo = document.getElementById("workspace-company-chip-logo");
+const workspaceCompanyChipName = document.getElementById("workspace-company-chip-name");
 
 const currentBoardName = document.getElementById("current-board-name");
 const boardSearchInput = document.getElementById("board-search");
@@ -846,6 +854,7 @@ const showApp = async (user) => {
   renderMyInvites();
   renderMembersInvitesSummary();
   renderTeams();
+  await syncCompanyProfileForm();
   updateReports();
 };
 
@@ -873,11 +882,10 @@ const handleLogin = async (email, password) => {
   setAuthMessage(apiResult?.data?.message ?? "Невалидни данни. Провери имейла и паролата.");
 };
 
-const handleRegister = async (name, email, password, companyName) => {
+const handleRegister = async (name, email, password) => {
   const normalizedName = normalizeText(name);
   const normalizedEmail = normalizeEmail(email);
   const normalizedPassword = normalizeText(password);
-  const normalizedCompanyName = normalizeText(companyName);
   const inviteToken = getInviteTokenFromUrl();
 
   const matchingInvite = loadInvites()
@@ -885,7 +893,7 @@ const handleRegister = async (name, email, password, companyName) => {
     .find((invite) => normalizeEmail(invite.email) === normalizedEmail);
   const hasInviteToken = Boolean(inviteToken);
 
-  if (!normalizedName || !normalizedEmail || normalizedPassword.length < 6 || (!hasInviteToken && !matchingInvite && !normalizedCompanyName)) {
+  if (!normalizedName || !normalizedEmail || normalizedPassword.length < 6) {
     setAuthMessage("Попълни коректно всички полета.");
     return;
   }
@@ -896,15 +904,14 @@ const handleRegister = async (name, email, password, companyName) => {
       name: normalizedName,
       email: normalizedEmail,
       password: normalizedPassword,
-      companyName: normalizedCompanyName,
       inviteToken,
     }),
   });
 
   if (apiResult?.ok) {
     activateAuthForm("login");
-    setAuthMessage("Регистрацията е успешна. Провери имейла си и потвърди акаунта преди вход.");
-    setVerificationHelpWithLink(apiResult.data?.verificationLink, normalizedEmail);
+    setAuthMessage("Регистрацията е успешна. Можеш да влезеш веднага.");
+    setVerificationHelp();
     return;
   }
 
@@ -934,6 +941,11 @@ const requestPasswordReset = async (email) => {
     method: "POST",
     body: JSON.stringify({ email: normalizedEmail }),
   });
+
+  if (apiResult?.ok && apiResult.data?.resetLink) {
+    window.location.href = apiResult.data.resetLink;
+    return;
+  }
 
   resetLinkEl.textContent = apiResult?.data?.message ?? "Ако имейлът съществува, изпратихме линк за смяна на парола.";
 };
@@ -2027,8 +2039,7 @@ registerForm.addEventListener("submit", async (event) => {
   await handleRegister(
     formData.get("name").toString(),
     formData.get("email").toString(),
-    formData.get("password").toString(),
-    formData.get("companyName").toString()
+    formData.get("password").toString()
   );
 });
 
@@ -2394,10 +2405,179 @@ closeNewPasswordButton.addEventListener("click", () => {
   closeModal(newPasswordModal);
 });
 
+
+const isOwnerOfCurrentAccount = () => {
+  const account = getCurrentAccount();
+  const currentUser = loadCurrentUser();
+  return Boolean(account?.ownerUserId && currentUser?.id && account.ownerUserId === currentUser.id);
+};
+
+const fileToDataUrl = (file) =>
+  new Promise((resolve, reject) => {
+    if (!file) {
+      resolve("");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+    reader.onerror = () => reject(new Error("Неуспешно качване на лого."));
+    reader.readAsDataURL(file);
+  });
+
+const updateWorkspaceCompanyIdentity = () => {
+  const account = getCurrentAccount();
+  const profile = account?.companyProfile ?? {};
+  const companyName = normalizeText(account?.name ?? "") || "Teamio";
+  const logo = normalizeText(profile.logoDataUrl ?? "");
+
+  workspaceCompanyName && (workspaceCompanyName.textContent = companyName);
+  workspaceCompanyChipName && (workspaceCompanyChipName.textContent = companyName);
+
+  if (workspaceCompanyLogo) {
+    workspaceCompanyLogo.hidden = !logo;
+    workspaceCompanyLogo.src = logo || "";
+  }
+  if (workspaceCompanyDot) {
+    workspaceCompanyDot.hidden = Boolean(logo);
+  }
+
+  if (workspaceCompanyChip) {
+    workspaceCompanyChip.hidden = !companyName;
+  }
+  if (workspaceCompanyChipLogo) {
+    workspaceCompanyChipLogo.hidden = !logo;
+    workspaceCompanyChipLogo.src = logo || "";
+  }
+};
+
+const syncCompanyProfileForm = async () => {
+  if (!companyProfileForm) {
+    updateWorkspaceCompanyIdentity();
+    return;
+  }
+
+  const account = getCurrentAccount();
+  const currentUser = loadCurrentUser();
+  const isOwner = isOwnerOfCurrentAccount();
+  const companySection = companyProfileForm.closest(".setting-item");
+
+  if (!account || !currentUser || !isOwner) {
+    if (companySection) {
+      companySection.hidden = true;
+    }
+    updateWorkspaceCompanyIdentity();
+    return;
+  }
+
+  if (companySection) {
+    companySection.hidden = false;
+  }
+
+  const params = new URLSearchParams({ accountId: account.id, requesterUserId: currentUser.id });
+  const apiResult = await apiRequest(`/api/accounts/company-profile?${params.toString()}`);
+
+  if (apiResult?.ok && apiResult.data?.companyProfile) {
+    const profile = apiResult.data.companyProfile;
+    const updatedAccounts = loadAccounts().map((entry) =>
+      entry.id === account.id
+        ? {
+            ...entry,
+            name: normalizeText(profile.name ?? entry.name ?? ""),
+            companyProfile: {
+              ...(entry.companyProfile ?? {}),
+              vatId: normalizeText(profile.vatId ?? ""),
+              vatNumber: normalizeText(profile.vatNumber ?? ""),
+              address: normalizeText(profile.address ?? ""),
+              logoDataUrl: normalizeText(profile.logoDataUrl ?? ""),
+            },
+          }
+        : entry
+    );
+    saveAccounts(updatedAccounts);
+  }
+
+  const refreshedAccount = getCurrentAccount();
+  const refreshedProfile = refreshedAccount?.companyProfile ?? {};
+  companyProfileForm.elements.name.value = refreshedAccount?.name ?? "";
+  companyProfileForm.elements.vatId.value = refreshedProfile.vatId ?? "";
+  companyProfileForm.elements.vatNumber.value = refreshedProfile.vatNumber ?? "";
+  companyProfileForm.elements.address.value = refreshedProfile.address ?? "";
+  companyProfileForm.elements.logo.value = "";
+
+  updateWorkspaceCompanyIdentity();
+};
+
+companyProfileForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const account = getCurrentAccount();
+  const currentUser = loadCurrentUser();
+  if (!account || !currentUser) {
+    return;
+  }
+
+  if (!isOwnerOfCurrentAccount()) {
+    setAuthMessage("Само собственикът може да редактира фирмените данни.");
+    return;
+  }
+
+  const formData = new FormData(companyProfileForm);
+  const companyName = normalizeText(formData.get("name")?.toString() ?? "");
+  if (!companyName) {
+    setAuthMessage("Името на фирмата е задължително.");
+    return;
+  }
+
+  const logoFile = formData.get("logo");
+  const existingLogo = normalizeText(account.companyProfile?.logoDataUrl ?? "");
+  const logoDataUrl = logoFile && typeof logoFile === "object" && logoFile.size > 0
+    ? await fileToDataUrl(logoFile)
+    : existingLogo;
+
+  const apiResult = await apiRequest("/api/accounts/company-profile", {
+    method: "POST",
+    body: JSON.stringify({
+      accountId: account.id,
+      requesterUserId: currentUser.id,
+      name: companyName,
+      vatId: normalizeText(formData.get("vatId")?.toString() ?? ""),
+      vatNumber: normalizeText(formData.get("vatNumber")?.toString() ?? ""),
+      address: normalizeText(formData.get("address")?.toString() ?? ""),
+      logoDataUrl,
+    }),
+  });
+
+  if (!apiResult?.ok || !apiResult.data?.companyProfile) {
+    setAuthMessage(apiResult?.data?.message ?? "Неуспешно запазване на фирмените данни.");
+    return;
+  }
+
+  const profile = apiResult.data.companyProfile;
+  const updatedAccounts = loadAccounts().map((entry) =>
+    entry.id === account.id
+      ? {
+          ...entry,
+          name: normalizeText(profile.name ?? companyName),
+          companyProfile: {
+            ...(entry.companyProfile ?? {}),
+            vatId: normalizeText(profile.vatId ?? ""),
+            vatNumber: normalizeText(profile.vatNumber ?? ""),
+            address: normalizeText(profile.address ?? ""),
+            logoDataUrl: normalizeText(profile.logoDataUrl ?? ""),
+          },
+        }
+      : entry
+  );
+
+  saveAccounts(updatedAccounts);
+  await syncCompanyProfileForm();
+  setAuthMessage("Фирмените данни са обновени.");
+});
+
 logoutButton.addEventListener("click", () => {
   localStorage.removeItem("teamio-current-user");
   showAuth();
 });
+
 
 const applyRoleBasedTabVisibility = () => {
   const canManage = hasManagementAccess();
@@ -2788,6 +2968,16 @@ boardTeamFilter?.addEventListener("change", () => {
     return;
   }
   renderBoard(getVisibleTasks());
+});
+
+settingsAccordion?.querySelectorAll(".setting-item__toggle").forEach((button) => {
+  button.addEventListener("click", () => {
+    const item = button.closest(".setting-item");
+    if (!item) {
+      return;
+    }
+    item.classList.toggle("setting-item--open");
+  });
 });
 
 const initialTasks = getVisibleTasks();

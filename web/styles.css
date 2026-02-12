@@ -343,6 +343,14 @@ body {
   box-shadow: 0 0 0 6px rgba(91, 107, 255, 0.12);
 }
 
+.brand__logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+}
+
 .brand__name {
   margin: 0;
   font-weight: 700;
@@ -430,6 +438,26 @@ body {
 .header p {
   margin: 0;
   color: var(--muted);
+}
+
+.workspace-company-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(91, 107, 255, 0.08);
+  border: 1px solid rgba(91, 107, 255, 0.22);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.workspace-company-chip img {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  object-fit: cover;
 }
 
 .header__actions {
@@ -992,8 +1020,8 @@ body {
 
 .settings-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 16px;
+  grid-template-columns: 1fr;
+  gap: 10px;
   margin-top: 16px;
 }
 
@@ -1002,6 +1030,46 @@ body {
   border-radius: 16px;
   padding: 16px;
   border: 1px solid var(--border);
+}
+
+.setting-item--accordion {
+  padding: 0;
+  overflow: hidden;
+}
+
+.setting-item__toggle {
+  width: 100%;
+  background: transparent;
+  border: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  font-size: 18px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.setting-item__chevron {
+  font-size: 18px;
+  transition: transform 0.2s ease;
+}
+
+.setting-item__body {
+  border-top: 1px solid var(--border);
+  padding: 0 16px;
+  display: none;
+}
+
+.setting-item--open .setting-item__body {
+  display: block;
+  padding: 14px 16px 16px;
+}
+
+.setting-item--open .setting-item__chevron {
+  transform: rotate(180deg);
 }
 
 .setting-check {
