@@ -3014,7 +3014,10 @@ inviteForm?.addEventListener("submit", async (event) => {
     return;
   }
   const account = getCurrentAccount();
-  const workspace = getCurrentWorkspace();
+  const workspaceSelect = inviteForm?.querySelector('select[name="workspaceId"]') ?? null;
+  const selectedWorkspaceId = workspaceSelect?.value?.trim() ?? "";
+  const validWorkspaceIds = new Set((account?.workspaces ?? []).map((entry) => entry.id));
+  const workspaceId = selectedWorkspaceId && validWorkspaceIds.has(selectedWorkspaceId) ? selectedWorkspaceId : "";
   const currentBoard = loadBoards().find((board) => board.id === getCurrentBoardId()) ?? null;
   if (!account || !email) {
     return;
@@ -3034,17 +3037,19 @@ inviteForm?.addEventListener("submit", async (event) => {
     revokedAt: null,
   };
 
+  const payload = {
+    accountId: account.id,
+    invitedByUserId: loadCurrentUser()?.id ?? null,
+    email,
+    role,
+    ...(workspaceId ? { workspaceId } : {}),
+    boardId: currentBoard?.id ?? null,
+    boardName: currentBoard?.name ?? null,
+  };
+
   const apiResult = await apiRequest("/api/invites", {
     method: "POST",
-    body: JSON.stringify({
-      accountId: account.id,
-      invitedByUserId: loadCurrentUser()?.id ?? null,
-      email,
-      role,
-      workspaceId: workspace?.id ?? null,
-      boardId: currentBoard?.id ?? null,
-      boardName: currentBoard?.name ?? null,
-    }),
+    body: JSON.stringify(payload),
   });
 
   let deliveryReport = null;
