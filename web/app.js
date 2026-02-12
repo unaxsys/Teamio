@@ -750,12 +750,17 @@ const applyWorkspaceSnapshot = (snapshot) => {
 };
 
 let syncInProgress = false;
+let syncTimer = null;
+let syncDirty = false;
+
 const pushWorkspaceState = async () => {
   const context = getSyncContext();
-  if (!context || syncInProgress) {
+  if (!context || syncInProgress || !syncDirty) {
     return;
   }
+
   syncInProgress = true;
+  syncDirty = false;
   try {
     await apiRequest("/api/workspace-state", {
       method: "PUT",
@@ -766,7 +771,21 @@ const pushWorkspaceState = async () => {
     });
   } finally {
     syncInProgress = false;
+    if (syncDirty) {
+      void pushWorkspaceState();
+    }
   }
+};
+
+const scheduleWorkspaceSync = () => {
+  syncDirty = true;
+  if (syncTimer) {
+    clearTimeout(syncTimer);
+  }
+  syncTimer = setTimeout(() => {
+    syncTimer = null;
+    void pushWorkspaceState();
+  }, 350);
 };
 
 const pullWorkspaceState = async () => {
@@ -782,12 +801,19 @@ const pullWorkspaceState = async () => {
 };
 
 const persistAndSync = (key, value) => {
+  const currentValue = localStorage.getItem(key);
   if (typeof value === "string") {
+    if (currentValue === value) {
+      return;
+    }
     localStorage.setItem(key, value);
   } else {
+    if (currentValue === null) {
+      return;
+    }
     localStorage.removeItem(key);
   }
-  void pushWorkspaceState();
+  scheduleWorkspaceSync();
 };
 
 const syncInvitesFromApi = async () => {
