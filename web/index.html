@@ -36,9 +36,10 @@
           </div>
         </section>
         <div class="auth-brand">
-          <span class="brand__dot"></span>
+          <img class="brand__logo" id="workspace-company-logo" alt="Лого на фирма" hidden />
+          <span class="brand__dot" id="workspace-company-dot"></span>
           <div>
-            <p class="brand__name">Teamio</p>
+            <p class="brand__name" id="workspace-company-name">Teamio</p>
             <p class="brand__tag">Работи лесно и красиво.</p>
           </div>
         </div>
@@ -125,9 +126,10 @@
     <div class="app app--hidden" id="app">
       <aside class="sidebar">
         <div class="brand">
-          <span class="brand__dot"></span>
+          <img class="brand__logo" id="workspace-company-logo" alt="Лого на фирма" hidden />
+          <span class="brand__dot" id="workspace-company-dot"></span>
           <div>
-            <p class="brand__name">Teamio</p>
+            <p class="brand__name" id="workspace-company-name">Teamio</p>
             <p class="brand__tag">Умно планиране</p>
           </div>
         </div>
@@ -160,6 +162,10 @@
           <div>
             <h1>Работно табло</h1>
             <p>Организирай задачите си с един поглед.</p>
+            <div class="workspace-company-chip" id="workspace-company-chip" hidden>
+              <img id="workspace-company-chip-logo" alt="Лого" hidden />
+              <span id="workspace-company-chip-name"></span>
+            </div>
           </div>
           <div class="header__actions">
             <select id="board-selector" aria-label="Избор на борд"></select>
@@ -362,85 +368,116 @@
           <div class="panel-card">
             <h2>Настройки</h2>
             <p>Персонализирай цветовете и предпочитанията на таблото.</p>
-            <div class="settings-grid">
-              <div class="setting-item">
-                <h4>Фирмени данни</h4>
-                <p>Попълни данните на фирмата. Можеш да ги обновяваш по всяко време.</p>
-                <form id="company-profile-form" class="stacked-form">
-                  <label>
-                    Име на фирма
-                    <input type="text" name="name" placeholder="Пример: Teamio OOD" required />
-                  </label>
-                  <label>
-                    ЕИК / Булстат
-                    <input type="text" name="vatId" placeholder="Пример: 123456789" />
-                  </label>
-                  <label>
-                    ДДС номер
-                    <input type="text" name="vatNumber" placeholder="Пример: BG123456789" />
-                  </label>
-                  <label>
-                    Адрес
-                    <textarea name="address" rows="2" placeholder="Град, улица, номер"></textarea>
-                  </label>
-                  <button type="submit" class="primary">Запази фирмени данни</button>
-                </form>
-              </div>
-              <div class="setting-item">
-                <h4>Акцентен цвят</h4>
-                <p>Избери основен акцент за интерфейса.</p>
-                <div class="color-options">
-                  <button type="button" class="color-swatch" data-color="#5b6bff"></button>
-                  <button type="button" class="color-swatch" data-color="#2bb8a1"></button>
-                  <button type="button" class="color-swatch" data-color="#f8b259"></button>
-                  <button type="button" class="color-swatch" data-color="#ff7a7a"></button>
-                  <button type="button" class="color-swatch" data-color="#6dd3ff"></button>
+            <div class="settings-grid settings-accordion" id="settings-accordion">
+              <section class="setting-item setting-item--accordion setting-item--open" data-setting-key="company">
+                <button type="button" class="setting-item__toggle">
+                  <span>Фирмени данни</span>
+                  <span class="setting-item__chevron">▾</span>
+                </button>
+                <div class="setting-item__body">
+                  <p>Само собственикът може да вижда и редактира тези данни.</p>
+                  <form id="company-profile-form" class="stacked-form">
+                    <label>
+                      Име на фирма
+                      <input type="text" name="name" placeholder="Пример: Teamio OOD" required />
+                    </label>
+                    <label>
+                      ЕИК / Булстат
+                      <input type="text" name="vatId" placeholder="Пример: 123456789" />
+                    </label>
+                    <label>
+                      ДДС номер
+                      <input type="text" name="vatNumber" placeholder="Пример: BG123456789" />
+                    </label>
+                    <label>
+                      Адрес
+                      <textarea name="address" rows="2" placeholder="Град, улица, номер"></textarea>
+                    </label>
+                    <label>
+                      Лого
+                      <input type="file" name="logo" accept="image/*" />
+                    </label>
+                    <button type="submit" class="primary">Запази фирмени данни</button>
+                  </form>
                 </div>
-              </div>
-              <div class="setting-item">
-                <h4>Плътност</h4>
-                <p>Избери компактна или комфортна визия.</p>
-                <div class="density-toggle">
-                  <button type="button" class="ghost density-button" data-density="comfortable">Комфортно</button>
-                  <button type="button" class="ghost density-button" data-density="compact">Компактно</button>
+              </section>
+
+              <section class="setting-item setting-item--accordion" data-setting-key="accent">
+                <button type="button" class="setting-item__toggle">
+                  <span>Акцентен цвят</span>
+                  <span class="setting-item__chevron">▾</span>
+                </button>
+                <div class="setting-item__body">
+                  <p>Избери основен акцент за интерфейса.</p>
+                  <div class="color-options">
+                    <button type="button" class="color-swatch" data-color="#5b6bff"></button>
+                    <button type="button" class="color-swatch" data-color="#2bb8a1"></button>
+                    <button type="button" class="color-swatch" data-color="#f8b259"></button>
+                    <button type="button" class="color-swatch" data-color="#ff7a7a"></button>
+                    <button type="button" class="color-swatch" data-color="#6dd3ff"></button>
+                  </div>
                 </div>
-              </div>
-              <div class="setting-item">
-                <h4>Календар и отчети</h4>
-                <p>Контролирай началния ден, уикенд оцветяване и критерия за завършени задачи.</p>
-                <label>
-                  Начален ден на седмицата
-                  <select id="week-start-day">
-                    <option value="monday">Понеделник</option>
-                    <option value="sunday">Неделя</option>
-                    <option value="saturday">Събота</option>
-                  </select>
-                </label>
-                <label class="setting-check">
-                  <input type="checkbox" id="setting-highlight-weekend" checked />
-                  Оцветявай събота и неделя различно
-                </label>
-                <label class="setting-check">
-                  <input type="checkbox" id="setting-done-by-column" checked />
-                  Завършена задача, ако е в колона „Готово“
-                </label>
-                <label class="setting-check">
-                  <input type="checkbox" id="setting-done-by-flag" />
-                  Завършена задача, ако е маркирана в детайлите
-                </label>
-                <label class="setting-check">
-                  <input type="checkbox" id="setting-show-board-filter" checked />
-                  Показвай филтъра по екипи над таблото
-                </label>
-                <p class="panel-list__meta" id="done-criteria-help"></p>
-              </div>
-              <div class="setting-item board-filter" id="board-filter-panel">
-                <div>
-                  <h4>Филтър по екипи</h4>
+              </section>
+
+              <section class="setting-item setting-item--accordion" data-setting-key="density">
+                <button type="button" class="setting-item__toggle">
+                  <span>Плътност</span>
+                  <span class="setting-item__chevron">▾</span>
+                </button>
+                <div class="setting-item__body">
+                  <p>Избери компактна или комфортна визия.</p>
+                  <div class="density-toggle">
+                    <button type="button" class="ghost density-button" data-density="comfortable">Комфортно</button>
+                    <button type="button" class="ghost density-button" data-density="compact">Компактно</button>
+                  </div>
+                </div>
+              </section>
+
+              <section class="setting-item setting-item--accordion" data-setting-key="calendar">
+                <button type="button" class="setting-item__toggle">
+                  <span>Календар и отчети</span>
+                  <span class="setting-item__chevron">▾</span>
+                </button>
+                <div class="setting-item__body">
+                  <p>Контролирай началния ден, уикенд оцветяване и критерия за завършени задачи.</p>
+                  <label>
+                    Начален ден на седмицата
+                    <select id="week-start-day">
+                      <option value="monday">Понеделник</option>
+                      <option value="sunday">Неделя</option>
+                      <option value="saturday">Събота</option>
+                    </select>
+                  </label>
+                  <label class="setting-check">
+                    <input type="checkbox" id="setting-highlight-weekend" checked />
+                    Оцветявай събота и неделя различно
+                  </label>
+                  <label class="setting-check">
+                    <input type="checkbox" id="setting-done-by-column" checked />
+                    Завършена задача, ако е в колона „Готово“
+                  </label>
+                  <label class="setting-check">
+                    <input type="checkbox" id="setting-done-by-flag" />
+                    Завършена задача, ако е маркирана в детайлите
+                  </label>
+                  <label class="setting-check">
+                    <input type="checkbox" id="setting-show-board-filter" checked />
+                    Показвай филтъра по екипи над таблото
+                  </label>
+                  <p class="panel-list__meta" id="done-criteria-help"></p>
+                </div>
+              </section>
+
+              <section class="setting-item setting-item--accordion board-filter" id="board-filter-panel" data-setting-key="teams">
+                <button type="button" class="setting-item__toggle">
+                  <span>Филтър по екипи</span>
+                  <span class="setting-item__chevron">▾</span>
+                </button>
+                <div class="setting-item__body">
                   <p>Избери екипите, които да се виждат в таблото със задачи.</p>
+                  <select id="board-team-filter" multiple></select>
                 </div>
-                <select id="board-team-filter" multiple></select>
-              </div>
+              </section>
             </div>
           </div>
         </section>

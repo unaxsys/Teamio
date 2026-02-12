@@ -250,6 +250,7 @@ const ensureDbShape = (db) => {
         vatId: normalizeText(account.companyProfile?.vatId ?? ""),
         vatNumber: normalizeText(account.companyProfile?.vatNumber ?? ""),
         address: normalizeText(account.companyProfile?.address ?? ""),
+        logoDataUrl: normalizeText(account.companyProfile?.logoDataUrl ?? ""),
       },
     };
   });
@@ -262,7 +263,7 @@ const send = (res, statusCode, payload) => {
     "Content-Type": "application/json; charset=utf-8",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Access-Control-Allow-Methods": "GET,POST,PATCH,OPTIONS",
   });
   res.end(JSON.stringify(payload));
 };
@@ -314,6 +315,8 @@ const canCreateCard = (db, account, userId) => {
   const role = getUserRoleInAccount(db, account, userId);
   return role === "Owner" || role === "Admin" || role === "Member";
 };
+
+const isAccountOwner = (account, userId) => Boolean(account && userId && account.ownerUserId === userId);
 
 const canMutateCard = (db, account, userId, card) => {
   const role = getUserRoleInAccount(db, account, userId);
@@ -445,6 +448,7 @@ const server = createServer(async (req, res) => {
           vatId: "",
           vatNumber: "",
           address: "",
+          logoDataUrl: "",
         },
       });
     }
@@ -619,6 +623,96 @@ const server = createServer(async (req, res) => {
     await writeDb(db);
 
     send(res, 200, { message: "Паролата е обновена." });
+    return;
+  }
+
+
+  if (requestUrl.pathname === "/api/accounts/company-profile" && req.method === "GET") {
+    const accountId = normalizeText(requestUrl.searchParams.get("accountId") ?? "");
+    const requesterUserId = normalizeText(requestUrl.searchParams.get("requesterUserId") ?? "");
+
+    if (!accountId || !requesterUserId) {
+      send(res, 400, { message: "Липсват accountId/requesterUserId." });
+      return;
+    }
+
+    const db = ensureDbShape(await readDb());
+    const account = db.accounts.find((item) => item.id === accountId);
+    if (!account) {
+      send(res, 404, { message: "Фирмата не е намерена." });
+      return;
+    }
+
+    if (!isAccountOwner(account, requesterUserId)) {
+      send(res, 403, { message: "Forbidden" });
+      return;
+    }
+
+    send(res, 200, {
+      companyProfile: {
+        name: account.name ?? "",
+        vatId: account.companyProfile?.vatId ?? "",
+        vatNumber: account.companyProfile?.vatNumber ?? "",
+        address: account.companyProfile?.address ?? "",
+        logoDataUrl: account.companyProfile?.logoDataUrl ?? "",
+      },
+    });
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/accounts/company-profile" && req.method === "POST") {
+    const body = await readBody(req);
+    const accountId = normalizeText(body.accountId);
+    const requesterUserId = normalizeText(body.requesterUserId);
+    const name = normalizeText(body.name);
+    const vatId = normalizeText(body.vatId);
+    const vatNumber = normalizeText(body.vatNumber);
+    const address = normalizeText(body.address);
+    const logoDataUrl = normalizeText(body.logoDataUrl);
+
+    if (!accountId || !requesterUserId || !name) {
+      send(res, 400, { message: "Липсват задължителни данни." });
+      return;
+    }
+
+    const db = ensureDbShape(await readDb());
+    const account = db.accounts.find((item) => item.id === accountId);
+    if (!account) {
+      send(res, 404, { message: "Фирмата не е намерена." });
+      return;
+    }
+
+    if (!isAccountOwner(account, requesterUserId)) {
+      send(res, 403, { message: "Forbidden" });
+      return;
+    }
+
+    db.accounts = db.accounts.map((item) =>
+      item.id === accountId
+        ? {
+            ...item,
+            name,
+            companyProfile: {
+              ...(item.companyProfile ?? {}),
+              vatId,
+              vatNumber,
+              address,
+              logoDataUrl,
+            },
+          }
+        : item
+    );
+
+    await writeDb(db);
+    send(res, 200, {
+      companyProfile: {
+        name,
+        vatId,
+        vatNumber,
+        address,
+        logoDataUrl,
+      },
+    });
     return;
   }
 
