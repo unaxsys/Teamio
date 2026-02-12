@@ -60,6 +60,13 @@ const STATIC_CONTENT_TYPES = {
 const hashPassword = (password) => createHash("sha256").update(password).digest("hex");
 const normalizeEmail = (email = "") => email.trim().toLowerCase();
 const normalizeText = (value = "") => value.trim();
+const normalizeOptionalId = (value = "") => {
+  const v = normalizeText(value);
+  if (!v) return "";
+  const lowered = v.toLowerCase();
+  if (lowered === "undefined" || lowered === "null") return "";
+  return v;
+};
 
 const normalizeWorkspaceRole = (role = "") => {
   const normalized = normalizeText(role).toLowerCase();
@@ -357,6 +364,8 @@ const serveStaticFile = async (req, res, requestUrl) => {
   if (!["GET", "HEAD"].includes(req.method ?? "")) {
     return false;
   }
+
+  if ((requestUrl?.pathname ?? "").startsWith("/api/")) return false;
 
   const isApiPath = requestUrl.pathname === "/api" || requestUrl.pathname.startsWith("/api/");
   if (isApiPath) {
@@ -888,8 +897,8 @@ const server = createServer(async (req, res) => {
     const invitedByUserId = normalizeText(body.invitedByUserId);
     const email = normalizeEmail(body.email);
     const role = normalizeWorkspaceRole(body.role || "Member");
-    const workspaceId = normalizeText(body.workspaceId);
-    const boardId = normalizeText(body.boardId);
+    const workspaceId = normalizeOptionalId(body.workspaceId);
+    const boardId = normalizeOptionalId(body.boardId);
     const boardName = normalizeText(body.boardName);
 
     if (!accountId || !email || !invitedByUserId) {
