@@ -143,6 +143,7 @@
         <nav class="nav">
           <button class="nav__item nav__item--active" data-tab="boards">Табла</button>
           <button class="nav__item" data-tab="teams">Екипи</button>
+          <button class="nav__item" data-tab="invites">Покани</button>
           <button class="nav__item" data-tab="members">Members / Invites <span class="nav-badge" id="members-invites-badge">0</span></button>
           <button class="nav__item" data-tab="calendar">Календар</button>
           <button class="nav__item" data-tab="reports">Отчети</button>
@@ -240,11 +241,14 @@
                 <div class="panel-list" id="team-catalog"></div>
               </div>
             </div>
-            <div class="panel-card" style="margin-top: 16px;">
-              <h3>Моите покани</h3>
-              <p class="panel-list__meta">Тук можеш да приемеш или откажеш покана, когато имейлът ти е поканен.</p>
-              <div class="panel-list" id="my-invite-list"></div>
-            </div>
+          </div>
+        </section>
+
+        <section class="tab-panel" data-tab-panel="invites">
+          <div class="panel-card">
+            <h2>Покани</h2>
+            <p>Тук можеш да приемеш или откажеш покана към фирма/workspace.</p>
+            <div class="panel-list" id="my-invite-list"></div>
           </div>
         </section>
 
@@ -259,6 +263,10 @@
                 <label>
                   Имейл
                   <input type="email" name="email" placeholder="name@company.com" required />
+                </label>
+                <label>
+                  Потребителско ID (по избор)
+                  <input type="text" name="invitedUserId" placeholder="user-123" />
                 </label>
                 <label>
                   Роля
@@ -276,24 +284,15 @@
                 <div class="invite-share__row">
                   <a id="invite-share-link" href="#" target="_blank" rel="noopener noreferrer"></a>
                   <button type="button" class="ghost" id="invite-copy-link">Копирай</button>
+                  <button type="button" class="ghost" id="invite-share-native">Сподели</button>
+                </div>
+                <div class="invite-share__social">
+                  <a id="invite-share-whatsapp" href="#" target="_blank" rel="noopener noreferrer">WhatsApp</a>
+                  <a id="invite-share-facebook" href="#" target="_blank" rel="noopener noreferrer">Facebook</a>
+                  <a id="invite-share-telegram" href="#" target="_blank" rel="noopener noreferrer">Telegram</a>
                 </div>
               </div>
-            </div>
-            <div class="panel-card" style="margin-top: 16px;">
-              <h3>Accepted members</h3>
-              <div class="panel-list" id="accepted-members-list"></div>
-            </div>
-          </div>
-        </section>
-
-
-        <section class="tab-panel" data-tab-panel="members">
-          <div class="panel-card">
-            <h2>Members / Invites</h2>
-            <p>Управлявай покани и членове в workspace-а.</p>
-            <div class="panel-card" style="margin-top: 16px;">
-              <h3>Pending invites <span class="nav-badge nav-badge--inline" id="pending-invites-count">0</span></h3>
-              <div class="panel-list" id="invite-list"></div>
+              <div class="panel-list" id="invite-list" style="margin-top: 12px;"></div>
             </div>
             <div class="panel-card" style="margin-top: 16px;">
               <h3>Accepted members</h3>

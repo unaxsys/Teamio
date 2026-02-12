@@ -896,13 +896,14 @@ const server = createServer(async (req, res) => {
     const accountId = normalizeText(body.accountId);
     const invitedByUserId = normalizeText(body.invitedByUserId);
     const email = normalizeEmail(body.email);
+    const invitedUserId = normalizeText(body.invitedUserId);
     const role = normalizeWorkspaceRole(body.role || "Member");
     const workspaceId = normalizeOptionalId(body.workspaceId);
     const boardId = normalizeOptionalId(body.boardId);
     const boardName = normalizeText(body.boardName);
 
-    if (!accountId || !email || !invitedByUserId) {
-      send(res, 400, { message: "Липсват данни за покана (accountId/email/invitedByUserId)." });
+    if (!accountId || (!email && !invitedUserId) || !invitedByUserId) {
+      send(res, 400, { message: "Липсват данни за покана (accountId/email|invitedUserId/invitedByUserId)." });
       return;
     }
 
@@ -915,8 +916,8 @@ const server = createServer(async (req, res) => {
 
     // Prevent self-invite
     const inviter = db.users.find((u) => u.id === invitedByUserId) ?? null;
-    if (inviter && normalizeEmail(inviter.email) === email) {
-      send(res, 409, { message: "Не можеш да поканиш собствения си имейл." });
+    if (inviter && ((email && normalizeEmail(inviter.email) === email) || invitedByUserId === invitedUserId)) {
+      send(res, 409, { message: "Не можеш да поканиш самия себе си." });
       return;
     }
 
@@ -925,12 +926,27 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    if (workspaceId && !(account.workspaces ?? []).some((workspace) => workspace.id === workspaceId)) {
-      send(res, 400, { message: "Невалидно workspace за поканата." });
+    let resolvedWorkspaceId = normalizeText(workspaceId);
+
+    // ако идва грешен workspaceId (пример: от друг акаунт / localStorage), не връщаме грешка,
+    // а fallback-ваме към първото workspace на акаунта
+    if (resolvedWorkspaceId && !(account.workspaces ?? []).some((workspace) => workspace.id === resolvedWorkspaceId)) {
+      resolvedWorkspaceId = (account.workspaces ?? [])[0]?.id ?? null;
+    }
+
+    // ако пак няма workspace – оставяме null
+    if (!resolvedWorkspaceId) resolvedWorkspaceId = null;
+
+    const existingUserById = invitedUserId ? db.users.find((item) => item.id === invitedUserId) ?? null : null;
+    const existingUserByEmail = email ? db.users.find((item) => normalizeEmail(item.email) === email) ?? null : null;
+    const existingUser = existingUserById ?? existingUserByEmail;
+
+    if (invitedUserId && !existingUserById && !email) {
+      send(res, 404, { message: "Потребител с това ID не е намерен. Покани го по имейл, за да споделиш линк." });
       return;
     }
 
-    const existingUser = db.users.find((item) => normalizeEmail(item.email) === email) ?? null;
+    const targetEmail = normalizeEmail(existingUser?.email ?? email);
 
     // If the user exists AND is already a member -> don't create invite
     if (existingUser && isAccountMember(db, account, existingUser.id)) {
@@ -942,7 +958,9 @@ const server = createServer(async (req, res) => {
 
     // Revoke previous active invite for same target/account/email
     db.invites = db.invites.map((item) => {
-      const sameTarget = item.accountId === accountId && normalizeEmail(item.email) === email;
+      const sameTargetByUser = existingUser?.id ? item.accountId === accountId && item.invitedUserId === existingUser.id : false;
+      const sameTargetByEmail = targetEmail ? item.accountId === accountId && normalizeEmail(item.email) === targetEmail : false;
+      const sameTarget = sameTargetByUser || sameTargetByEmail;
       const isActive = isInviteActive(item, now);
       if (sameTarget && isActive) {
         return {
@@ -960,9 +978,9 @@ const server = createServer(async (req, res) => {
       accountId,
       invitedByUserId: invitedByUserId || null,
       invitedUserId: existingUser?.id ?? null,
-      email,
+      email: targetEmail,
       role,
-      workspaceId: workspaceId || null,
+      workspaceId: resolvedWorkspaceId,
       boardId: boardId || null,
       boardName: boardName || null,
       delivery: existingUser ? "internal" : "email",
@@ -1503,11 +1521,11 @@ const server = createServer(async (req, res) => {
         };
       });
 
-      // Optionally link user's accountId (only if it's empty) - keep your current model intact
+      // IMPORTANT: за текущия модел (1 активен account на потребител),
+      // при accept прехвърляме потребителя към акаунта на поканата
       if (userId) {
         db.users = db.users.map((u) => {
           if (u.id !== userId) return u;
-          if (u.accountId) return u; // do not override
           return { ...u, accountId: invite.accountId };
         });
       }
