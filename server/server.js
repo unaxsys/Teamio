@@ -766,12 +766,22 @@ const server = createServer(async (req, res) => {
       }
     }
 
-    const invites = db.invites.filter((invite) => {
-      const byAccount = canReadAccountInvites ? invite.accountId === accountId : false;
-      const byEmail = email ? normalizeEmail(invite.email) === email : false;
-      const byInvitedUser = userId ? invite.invitedUserId === userId : false;
-      return byAccount || byEmail || byInvitedUser;
-    });
+    const invites = db.invites
+      .filter((invite) => {
+        const byAccount = canReadAccountInvites ? invite.accountId === accountId : false;
+        const byEmail = email ? normalizeEmail(invite.email) === email : false;
+        const byInvitedUser = userId ? invite.invitedUserId === userId : false;
+        return byAccount || byEmail || byInvitedUser;
+      })
+      .map((invite) => {
+        const account = db.accounts.find((entry) => entry.id === invite.accountId);
+        const invitedByUser = db.users.find((entry) => entry.id === invite.invitedByUserId);
+        return {
+          ...invite,
+          accountName: account?.name ?? null,
+          invitedByName: invitedByUser?.name ?? invitedByUser?.email ?? null,
+        };
+      });
 
     send(res, 200, { invites });
     return;

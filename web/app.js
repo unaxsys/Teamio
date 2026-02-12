@@ -1730,14 +1730,20 @@ const renderMyInvites = () => {
   }
 
   const accounts = loadAccounts();
+  const users = loadUsers();
 
   invites.forEach((invite) => {
-    const accountName = accounts.find((account) => account.id === invite.accountId)?.name ?? "Неизвестна фирма";
+    const accountName = invite.accountName || accounts.find((account) => account.id === invite.accountId)?.name || "Неизвестна фирма";
+    const invitedByName =
+      invite.invitedByName ||
+      users.find((entry) => entry.id === invite.invitedByUserId)?.name ||
+      users.find((entry) => entry.id === invite.invitedByUserId)?.email ||
+      "Неизвестен";
     const item = document.createElement("div");
     item.className = "panel-list__item panel-list__item--stack";
 
     const status = getInviteStatusLabel(invite);
-    item.innerHTML = `<div><strong>${accountName}</strong><div class="panel-list__meta">${invite.email} · Роля: ${invite.role} · ${status}</div></div>`;
+    item.innerHTML = `<div><strong>${accountName}</strong><div class="panel-list__meta">Покана от: ${invitedByName} · До: ${invite.email} · Роля: ${invite.role} · ${status}</div></div>`;
 
     const canRespond = !invite.acceptedAt && !invite.declinedAt && !invite.revokedAt && invite.expiresAt > Date.now();
     if (canRespond) {
