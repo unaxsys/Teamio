@@ -88,6 +88,7 @@ const doneByFlagCheckbox = document.getElementById("setting-done-by-flag");
 const showBoardFilterCheckbox = document.getElementById("setting-show-board-filter");
 const boardFilterPanel = document.getElementById("board-filter-panel");
 const doneCriteriaHelp = document.getElementById("done-criteria-help");
+const companyProfileForm = document.getElementById("company-profile-form");
 
 const currentBoardName = document.getElementById("current-board-name");
 const boardSearchInput = document.getElementById("board-search");
@@ -846,6 +847,7 @@ const showApp = async (user) => {
   renderMyInvites();
   renderMembersInvitesSummary();
   renderTeams();
+  syncCompanyProfileForm();
   updateReports();
 };
 
@@ -873,11 +875,10 @@ const handleLogin = async (email, password) => {
   setAuthMessage(apiResult?.data?.message ?? "Невалидни данни. Провери имейла и паролата.");
 };
 
-const handleRegister = async (name, email, password, companyName) => {
+const handleRegister = async (name, email, password) => {
   const normalizedName = normalizeText(name);
   const normalizedEmail = normalizeEmail(email);
   const normalizedPassword = normalizeText(password);
-  const normalizedCompanyName = normalizeText(companyName);
   const inviteToken = getInviteTokenFromUrl();
 
   const matchingInvite = loadInvites()
@@ -885,7 +886,7 @@ const handleRegister = async (name, email, password, companyName) => {
     .find((invite) => normalizeEmail(invite.email) === normalizedEmail);
   const hasInviteToken = Boolean(inviteToken);
 
-  if (!normalizedName || !normalizedEmail || normalizedPassword.length < 6 || (!hasInviteToken && !matchingInvite && !normalizedCompanyName)) {
+  if (!normalizedName || !normalizedEmail || normalizedPassword.length < 6) {
     setAuthMessage("Попълни коректно всички полета.");
     return;
   }
@@ -896,7 +897,6 @@ const handleRegister = async (name, email, password, companyName) => {
       name: normalizedName,
       email: normalizedEmail,
       password: normalizedPassword,
-      companyName: normalizedCompanyName,
       inviteToken,
     }),
   });
@@ -2027,8 +2027,7 @@ registerForm.addEventListener("submit", async (event) => {
   await handleRegister(
     formData.get("name").toString(),
     formData.get("email").toString(),
-    formData.get("password").toString(),
-    formData.get("companyName").toString()
+    formData.get("password").toString()
   );
 });
 
@@ -2394,10 +2393,59 @@ closeNewPasswordButton.addEventListener("click", () => {
   closeModal(newPasswordModal);
 });
 
+
+companyProfileForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const account = getCurrentAccount();
+  if (!account) {
+    return;
+  }
+
+  const formData = new FormData(companyProfileForm);
+  const companyName = normalizeText(formData.get("name")?.toString() ?? "");
+  if (!companyName) {
+    setAuthMessage("Името на фирмата е задължително.");
+    return;
+  }
+
+  const updatedAccounts = loadAccounts().map((entry) =>
+    entry.id === account.id
+      ? {
+          ...entry,
+          name: companyName,
+          companyProfile: {
+            ...(entry.companyProfile ?? {}),
+            vatId: normalizeText(formData.get("vatId")?.toString() ?? ""),
+            vatNumber: normalizeText(formData.get("vatNumber")?.toString() ?? ""),
+            address: normalizeText(formData.get("address")?.toString() ?? ""),
+          },
+        }
+      : entry
+  );
+
+  saveAccounts(updatedAccounts);
+  syncCompanyProfileForm();
+  setAuthMessage("Фирмените данни са обновени.");
+});
+
 logoutButton.addEventListener("click", () => {
   localStorage.removeItem("teamio-current-user");
   showAuth();
 });
+
+
+const syncCompanyProfileForm = () => {
+  if (!companyProfileForm) {
+    return;
+  }
+
+  const account = getCurrentAccount();
+  const profile = account?.companyProfile ?? {};
+  companyProfileForm.elements.name.value = account?.name ?? "";
+  companyProfileForm.elements.vatId.value = profile.vatId ?? "";
+  companyProfileForm.elements.vatNumber.value = profile.vatNumber ?? "";
+  companyProfileForm.elements.address.value = profile.address ?? "";
+};
 
 const applyRoleBasedTabVisibility = () => {
   const canManage = hasManagementAccess();
