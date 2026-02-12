@@ -865,9 +865,26 @@ const syncInvitesFromApi = async () => {
 
 const refreshInviteUi = async () => {
   await syncInvitesFromApi();
-  renderInvites();
   renderMyInvites();
   renderMembersInvitesSummary();
+};
+
+const normalizeInviteFormFields = () => {
+  if (!inviteForm) {
+    return;
+  }
+  const duplicatedUserIdFields = inviteForm.querySelectorAll('input[name="invitedUserId"]');
+  duplicatedUserIdFields.forEach((field, index) => {
+    if (index === 0) {
+      return;
+    }
+    const label = field.closest("label");
+    if (label) {
+      label.remove();
+    } else {
+      field.remove();
+    }
+  });
 };
 
 const stopInvitesPolling = () => {
@@ -1006,6 +1023,7 @@ const updateProfile = (user) => {
 
 const showApp = async (user) => {
   const normalizedUser = ensureAccountForUser(user);
+  normalizeInviteFormFields();
   await pullWorkspaceState();
   authScreenEl.style.display = "none";
   appEl.classList.remove("app--hidden");
@@ -1600,6 +1618,13 @@ const renderInvites = () => {
   if (!inviteList) {
     return;
   }
+
+  // Pending invites за admin/owner се рендерират от renderMembersInvitesSummary().
+  // Избягваме двойно рендериране върху един и същ контейнер (flicker).
+  if (hasManagementAccess()) {
+    return;
+  }
+
   const currentAccount = getCurrentAccount();
   const invites = loadInvites().filter((invite) => invite.accountId && invite.accountId === currentAccount?.id);
   inviteList.innerHTML = "";
