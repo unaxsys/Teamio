@@ -714,15 +714,6 @@ const syncInvitesFromApi = async () => {
   }
 };
 
-const apiHasUserInAnotherAccount = async (email, accountId) => {
-  const apiResult = await apiRequest(`/api/users/by-email?email=${encodeURIComponent(normalizeEmail(email))}`);
-  if (!apiResult?.ok) {
-    return false;
-  }
-  const user = apiResult.data?.user;
-  return Boolean(user?.accountId && user.accountId !== accountId);
-};
-
 const hashPassword = async (password) => {
   const subtleCrypto = globalThis.crypto?.subtle;
   if (!subtleCrypto) {
@@ -2621,16 +2612,6 @@ inviteForm?.addEventListener("submit", async (event) => {
   }
   const account = getCurrentAccount();
   if (!account || !email) {
-    return;
-  }
-
-  const hasUserInAnotherCompanyApi = await apiHasUserInAnotherAccount(email, account.id);
-  const hasUserInAnotherCompanyLocal = loadUsers().some(
-    (user) => normalizeEmail(user.email) === email && user.accountId && user.accountId !== account.id
-  );
-  const hasUserInAnotherCompany = hasUserInAnotherCompanyApi || hasUserInAnotherCompanyLocal;
-  if (hasUserInAnotherCompany) {
-    setAuthMessage("Този имейл вече принадлежи на друг акаунт и не може да бъде поканен.");
     return;
   }
 

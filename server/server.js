@@ -727,12 +727,6 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    const existingUser = db.users.find((user) => normalizeEmail(user.email) === email);
-    if (existingUser?.accountId && existingUser.accountId !== accountId) {
-      send(res, 409, { message: "Този имейл вече принадлежи на друг акаунт и не може да бъде поканен." });
-      return;
-    }
-
     const invite = {
       id: `invite-${Date.now()}`,
       accountId,
@@ -937,32 +931,50 @@ const server = createServer(async (req, res) => {
           ? { ...item, acceptedAt: now, acceptedUserId: userId || item.acceptedUserId || null, declinedAt: null, usedAt: now }
           : item
       );
-      db.users = db.users.map((user) =>
-        userId && user.id === userId ? { ...user, accountId: invite.accountId, role: invite.role ?? user.role } : user
-      );
       db.accounts = db.accounts.map((account) => {
         if (account.id !== invite.accountId) {
           return account;
         }
 
-        const memberExists = (account.members ?? []).some((member) => normalizeEmail(member.email ?? "") === email);
-        if (memberExists) {
-          return account;
-        }
+        const existingMember = (account.members ?? []).find((member) => normalizeEmail(member.email ?? "") === email);
+        const nextMembers = existingMember
+          ? (account.members ?? []).map((member) =>
+              normalizeEmail(member.email ?? "") === email
+                ? {
+                    ...member,
+                    userId: member.userId ?? userId ?? null,
+                    role: invite.role ?? member.role ?? "Member",
+                  }
+                : member
+            )
+          : [
+              ...(account.members ?? []),
+              {
+                id: userId || `member-${Date.now()}`,
+                userId: userId || null,
+                name: email,
+                email,
+                role: invite.role ?? "Member",
+                teamIds: [],
+              },
+            ];
+
+        const nextWorkspaces = (account.workspaces ?? []).map((workspace) => {
+          const existingWorkspaceMember = (workspace.memberRoles ?? []).find((member) => member.userId === userId);
+          return {
+            ...workspace,
+            memberRoles: existingWorkspaceMember
+              ? (workspace.memberRoles ?? []).map((member) =>
+                  member.userId === userId ? { ...member, role: invite.role ?? member.role ?? "Member" } : member
+                )
+              : [...(workspace.memberRoles ?? []), ...(userId ? [{ userId, role: invite.role ?? "Member" }] : [])],
+          };
+        });
 
         return {
           ...account,
-          members: [
-            ...(account.members ?? []),
-            {
-              id: userId || `member-${Date.now()}`,
-              userId: userId || null,
-              name: email,
-              email,
-              role: invite.role ?? "Member",
-              teamIds: [],
-            },
-          ],
+          members: nextMembers,
+          workspaces: nextWorkspaces,
         };
       });
     } else {
