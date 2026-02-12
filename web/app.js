@@ -824,26 +824,42 @@ const syncInvitesFromApi = async () => {
     return;
   }
 
-  const params = new URLSearchParams();
-  if (user.accountId && hasManagementAccess()) {
-    params.set("accountId", user.accountId);
-    params.set("requesterUserId", user.id);
-  }
-  if (user.email) {
-    params.set("email", normalizeEmail(user.email));
-  }
+  const mergedInvites = new Map();
+
+  const inboxParams = new URLSearchParams();
   if (user.id) {
-    params.set("userId", user.id);
+    inboxParams.set("userId", user.id);
+  } else if (user.email) {
+    inboxParams.set("email", normalizeEmail(user.email));
   }
 
-  if (!params.toString()) {
-    return;
+  if (inboxParams.toString()) {
+    const inboxResult = await apiRequest(`/api/invites/inbox?${inboxParams.toString()}`);
+    if (inboxResult?.ok && Array.isArray(inboxResult.data?.invites)) {
+      inboxResult.data.invites.forEach((invite) => {
+        if (invite?.id) {
+          mergedInvites.set(invite.id, invite);
+        }
+      });
+    }
   }
 
-  const apiResult = await apiRequest(`/api/invites?${params.toString()}`);
-  if (apiResult?.ok && Array.isArray(apiResult.data?.invites)) {
-    saveInvites(apiResult.data.invites);
+  if (user.accountId && hasManagementAccess()) {
+    const accountParams = new URLSearchParams();
+    accountParams.set("accountId", user.accountId);
+    accountParams.set("requesterUserId", user.id);
+
+    const accountResult = await apiRequest(`/api/invites?${accountParams.toString()}`);
+    if (accountResult?.ok && Array.isArray(accountResult.data?.invites)) {
+      accountResult.data.invites.forEach((invite) => {
+        if (invite?.id) {
+          mergedInvites.set(invite.id, invite);
+        }
+      });
+    }
   }
+
+  saveInvites(Array.from(mergedInvites.values()));
 };
 
 const hashPassword = async (password) => {
@@ -3014,7 +3030,10 @@ inviteForm?.addEventListener("submit", async (event) => {
     return;
   }
   const account = getCurrentAccount();
-  const workspace = getCurrentWorkspace();
+  const workspaceSelect = inviteForm?.querySelector('select[name="workspaceId"]') ?? null;
+  const selectedWorkspaceId = workspaceSelect?.value?.trim() ?? "";
+  const validWorkspaceIds = new Set((account?.workspaces ?? []).map((entry) => entry.id));
+  const workspaceId = selectedWorkspaceId && validWorkspaceIds.has(selectedWorkspaceId) ? selectedWorkspaceId : "";
   const currentBoard = loadBoards().find((board) => board.id === getCurrentBoardId()) ?? null;
   if (!account || !email) {
     return;
@@ -3034,17 +3053,19 @@ inviteForm?.addEventListener("submit", async (event) => {
     revokedAt: null,
   };
 
+  const payload = {
+    accountId: account.id,
+    invitedByUserId: loadCurrentUser()?.id ?? null,
+    email,
+    role,
+    ...(workspaceId ? { workspaceId } : {}),
+    boardId: currentBoard?.id ?? null,
+    boardName: currentBoard?.name ?? null,
+  };
+
   const apiResult = await apiRequest("/api/invites", {
     method: "POST",
-    body: JSON.stringify({
-      accountId: account.id,
-      invitedByUserId: loadCurrentUser()?.id ?? null,
-      email,
-      role,
-      workspaceId: workspace?.id ?? null,
-      boardId: currentBoard?.id ?? null,
-      boardName: currentBoard?.name ?? null,
-    }),
+    body: JSON.stringify(payload),
   });
 
   let deliveryReport = null;
