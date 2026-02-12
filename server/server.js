@@ -1524,9 +1524,11 @@ const server = createServer(async (req, res) => {
     }
   }
 
-  const servedStatic = await serveStaticFile(req, res, requestUrl);
-  if (servedStatic) {
-    return;
+  if (!requestUrl.pathname.startsWith("/api/")) {
+    const servedStatic = await serveStaticFile(req, res, requestUrl);
+    if (servedStatic) {
+      return;
+    }
   }
 
   send(res, 404, { message: "Not found" });
