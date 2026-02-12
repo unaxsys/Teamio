@@ -758,6 +758,7 @@ const applyWorkspaceSnapshot = (snapshot) => {
 let syncInProgress = false;
 let syncTimer = null;
 let syncDirty = false;
+let invitesPollTimer = null;
 
 const pushWorkspaceState = async () => {
   const context = getSyncContext();
@@ -865,6 +866,31 @@ const syncInvitesFromApi = async () => {
   }
 
   saveInvites(Array.from(mergedInvites.values()));
+};
+
+const refreshInviteUi = async () => {
+  await syncInvitesFromApi();
+  renderInvites();
+  renderMyInvites();
+  renderMembersInvitesSummary();
+};
+
+const stopInvitesPolling = () => {
+  if (!invitesPollTimer) {
+    return;
+  }
+  clearInterval(invitesPollTimer);
+  invitesPollTimer = null;
+};
+
+const startInvitesPolling = () => {
+  stopInvitesPolling();
+  invitesPollTimer = setInterval(() => {
+    if (!loadCurrentUser()) {
+      return;
+    }
+    void refreshInviteUi();
+  }, 10000);
 };
 
 const hashPassword = async (password) => {
@@ -1002,9 +1028,11 @@ const showApp = async (user) => {
   renderTeams();
   await syncCompanyProfileForm();
   updateReports();
+  startInvitesPolling();
 };
 
 const showAuth = () => {
+  stopInvitesPolling();
   authScreenEl.style.display = "flex";
   appEl.classList.add("app--hidden");
 };
@@ -2818,8 +2846,16 @@ companyProfileForm?.addEventListener("submit", async (event) => {
 });
 
 logoutButton.addEventListener("click", () => {
+  stopInvitesPolling();
   persistAndSync("teamio-current-user", null);
   showAuth();
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden || !loadCurrentUser()) {
+    return;
+  }
+  void refreshInviteUi();
 });
 
 
