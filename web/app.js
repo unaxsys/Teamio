@@ -826,17 +826,17 @@ const syncInvitesFromApi = async () => {
 
   const mergedInvites = new Map();
 
-  const inboxParams = new URLSearchParams();
+  const myInvitesParams = new URLSearchParams();
   if (user.id) {
-    inboxParams.set("userId", user.id);
+    myInvitesParams.set("userId", user.id);
   } else if (user.email) {
-    inboxParams.set("email", normalizeEmail(user.email));
+    myInvitesParams.set("email", normalizeEmail(user.email));
   }
 
-  if (inboxParams.toString()) {
-    const inboxResult = await apiRequest(`/api/invites/inbox?${inboxParams.toString()}`);
-    if (inboxResult?.ok && Array.isArray(inboxResult.data?.invites)) {
-      inboxResult.data.invites.forEach((invite) => {
+  if (myInvitesParams.toString()) {
+    const myInvitesResult = await apiRequest(`/api/invites?${myInvitesParams.toString()}`);
+    if (myInvitesResult?.ok && Array.isArray(myInvitesResult.data?.invites)) {
+      myInvitesResult.data.invites.forEach((invite) => {
         if (invite?.id) {
           mergedInvites.set(invite.id, invite);
         }
