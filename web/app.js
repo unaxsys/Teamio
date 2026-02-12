@@ -44,6 +44,9 @@ const myInviteList = document.getElementById("my-invite-list");
 const inviteShareBox = document.getElementById("invite-share");
 const inviteShareLink = document.getElementById("invite-share-link");
 const inviteCopyLinkButton = document.getElementById("invite-copy-link");
+const acceptedMembersList = document.getElementById("accepted-members-list");
+const membersInvitesBadge = document.getElementById("members-invites-badge");
+const pendingInvitesCount = document.getElementById("pending-invites-count");
 const memberTeamIdsSelect = document.getElementById("member-team-ids");
 const taskTeamIdsSelect = document.getElementById("task-team-ids");
 const boardTeamFilter = document.getElementById("board-team-filter");
@@ -575,8 +578,8 @@ const hasPermission = (scope, action) => {
   const matrix = {
     Account: { billing: ["Owner"], delete: ["Owner"] },
     Workspace: { members: ["Owner", "Admin"], boards: ["Owner", "Admin"] },
-    Board: { lists: ["Owner", "Admin", "Member"], cards: ["Owner", "Admin", "Member"] },
-    Card: { edit: ["Owner", "Admin", "Member"], assign: ["Owner", "Admin", "Member"], comment: ["Owner", "Admin", "Member", "Viewer"] },
+    Board: { lists: ["Owner", "Admin"], cards: ["Owner", "Admin", "Member"] },
+    Card: { edit: ["Owner", "Admin"], assign: ["Owner", "Admin"], comment: ["Owner", "Admin", "Member", "Viewer"] },
   };
 
   const allowedRoles = matrix[scope]?.[action] ?? [];
@@ -584,6 +587,20 @@ const hasPermission = (scope, action) => {
 };
 
 const hasManagementAccess = () => hasPermission("Workspace", "members") || hasPermission("Workspace", "boards");
+
+const canCreateCards = () => hasPermission("Board", "cards");
+const canManageBoardStructure = () => hasPermission("Board", "lists");
+const canEditTask = (task) => {
+  const user = loadCurrentUser();
+  if (!user || !task) {
+    return false;
+  }
+  if (hasPermission("Card", "edit")) {
+    return true;
+  }
+  return normalizeRole(user.role ?? "Member") === "Member" && task.createdBy === user.id;
+};
+
 
 const applyManagementAccessUi = () => {
   const hasAccess = hasManagementAccess();
@@ -610,6 +627,18 @@ const applyManagementAccessUi = () => {
     button.disabled = !hasAccess;
     button.title = hasAccess ? "" : "Само администратор/собственик може да управлява бордове.";
   });
+
+  if (newColumnButton) {
+    const canManage = canManageBoardStructure();
+    newColumnButton.disabled = !canManage;
+    newColumnButton.title = canManage ? "" : "Нямаш право да управляваш листове.";
+  }
+
+  if (newBoardButton) {
+    const canCreate = canCreateCards();
+    newBoardButton.disabled = !canCreate;
+    newBoardButton.title = canCreate ? "" : "Нямаш право да създаваш карти.";
+  }
 };
 
 const loadApiBase = () => {
@@ -657,6 +686,7 @@ const syncInvitesFromApi = async () => {
   const params = new URLSearchParams();
   if (user.accountId) {
     params.set("accountId", user.accountId);
+    params.set("requesterUserId", user.id);
   }
   if (user.email) {
     params.set("email", normalizeEmail(user.email));
@@ -803,6 +833,7 @@ const showApp = async (user) => {
   appEl.classList.remove("app--hidden");
   updateProfile(normalizedUser);
   applyManagementAccessUi();
+  applyRoleBasedTabVisibility();
   renderBoardSelector();
   syncTeamSelectors();
   await syncInvitesFromApi();
@@ -810,6 +841,7 @@ const showApp = async (user) => {
   renderTeams();
   renderInvites();
   renderMyInvites();
+  renderMembersInvitesSummary();
   updateReports();
 };
 
@@ -1093,6 +1125,11 @@ const openTaskDetails = (taskId) => {
   taskDetailsForm.querySelector('input[name="due"]').value = task.due ?? "";
   taskDetailsForm.querySelector('select[name="level"]').value = task.level ?? "L2";
   taskDetailsForm.querySelector('input[name="completed"]').checked = Boolean(task.completed);
+  const editable = canEditTask(task);
+  Array.from(taskDetailsForm.querySelectorAll("input, textarea, select, button[type='submit']")).forEach((control) => {
+    if (control.name === "taskId") return;
+    control.disabled = !editable;
+  });
   openModal(taskDetailsModal);
 };
 
@@ -1142,6 +1179,9 @@ const createCard = (task, columnColor) => {
   card.addEventListener("click", () => {
     openTaskDetails(task.id);
   });
+  if (!canEditTask(task)) {
+    card.classList.add("card--readonly");
+  }
 
   return card;
 };
@@ -1232,6 +1272,11 @@ const renderBoard = (tasks) => {
       openModal(listLimitModal);
     });
 
+    const canManageLists = canManageBoardStructure();
+    [dragButton, renameButton, limitButton].forEach((btn) => {
+      btn.disabled = !canManageLists;
+      btn.style.display = canManageLists ? "inline-flex" : "none";
+    });
     actions.append(count, dragButton, renameButton, limitButton);
     header.append(titleWrap, actions);
     columnEl.append(header);
@@ -1275,10 +1320,18 @@ const renderBoard = (tasks) => {
       }
 
       const taskId = event.dataTransfer.getData("text/plain");
+      if (!canManageBoardStructure() && !canCreateCards()) {
+        return;
+      }
       if (!taskId) {
         return;
       }
       const allTasks = loadTasks();
+      const movingTask = allTasks.find((task) => task.id === taskId);
+      if (!movingTask || !canEditTask(movingTask)) {
+        setAuthMessage("Нямаш право да местиш тази карта.");
+        return;
+      }
       const updated = allTasks.map((task) => (task.id === taskId ? { ...task, column: column.id, listId: column.id } : task));
       saveTasks(updated);
       renderBoard(getVisibleTasks());
@@ -1362,6 +1415,57 @@ const renderInvites = () => {
     item.innerHTML = `<div><strong>${invite.email}</strong><div class="panel-list__meta">Роля: ${invite.role} · ${status}</div></div>`;
     inviteList.append(item);
   });
+};
+
+const renderMembersInvitesSummary = async () => {
+  if (!acceptedMembersList) {
+    return;
+  }
+  const user = loadCurrentUser();
+  if (!user?.accountId || !hasManagementAccess()) {
+    acceptedMembersList.innerHTML = "";
+    if (pendingInvitesCount) pendingInvitesCount.textContent = "0";
+    if (membersInvitesBadge) membersInvitesBadge.textContent = "0";
+    return;
+  }
+
+  const params = new URLSearchParams({ accountId: user.accountId, requesterUserId: user.id });
+  const apiResult = await apiRequest(`/api/workspaces/members-summary?${params.toString()}`);
+  if (!apiResult?.ok) {
+    return;
+  }
+
+  const pending = Array.isArray(apiResult.data?.pendingInvites) ? apiResult.data.pendingInvites : [];
+  const accepted = Array.isArray(apiResult.data?.acceptedMembers) ? apiResult.data.acceptedMembers : [];
+
+  if (pendingInvitesCount) pendingInvitesCount.textContent = String(pending.length);
+  if (membersInvitesBadge) membersInvitesBadge.textContent = String(pending.length);
+
+  inviteList.innerHTML = "";
+  if (pending.length === 0) {
+    inviteList.innerHTML = '<div class="panel-list__item"><div><strong>Няма pending покани</strong></div></div>';
+  } else {
+    pending.forEach((invite) => {
+      const item = document.createElement("div");
+      item.className = "panel-list__item";
+      const invitedBy = loadUsers().find((entry) => entry.id === invite.invitedByUserId)?.name ?? "Неизвестен";
+      item.innerHTML = `<div><strong>${invite.email}</strong><div class="panel-list__meta">Поканил: ${invitedBy} · ${new Date(invite.createdAt).toLocaleDateString("bg-BG")}</div></div>`;
+      inviteList.append(item);
+    });
+  }
+
+  acceptedMembersList.innerHTML = "";
+  if (accepted.length === 0) {
+    acceptedMembersList.innerHTML = '<div class="panel-list__item"><div><strong>Няма приети членове</strong></div></div>';
+  } else {
+    accepted.forEach((member) => {
+      const item = document.createElement("div");
+      item.className = "panel-list__item";
+      const joinedAt = member.joinedAt ? new Date(member.joinedAt).toLocaleDateString("bg-BG") : "-";
+      item.innerHTML = `<div><strong>${member.name}</strong><div class="panel-list__meta">${member.email} · ${member.role} · ${joinedAt}</div></div>`;
+      acceptedMembersList.append(item);
+    });
+  }
 };
 
 const renderMyInvites = () => {
@@ -1849,6 +1953,10 @@ const updateReports = () => {
 };
 
 newColumnButton.addEventListener("click", () => {
+  if (!canManageBoardStructure()) {
+    setAuthMessage("Нямаш право да създаваш листове.");
+    return;
+  }
   const name = window.prompt("Име на новата колона:");
   if (!name) {
     return;
@@ -2187,6 +2295,11 @@ taskDetailsForm?.addEventListener("submit", (event) => {
   const formData = new FormData(taskDetailsForm);
   const taskId = formData.get("taskId")?.toString();
   const tasks = loadTasks();
+  const sourceTask = tasks.find((task) => task.id === taskId);
+  if (!canEditTask(sourceTask)) {
+    setAuthMessage("Нямаш право да редактираш тази карта.");
+    return;
+  }
   const updatedTasks = tasks.map((task) =>
     task.id === taskId
       ? {
@@ -2256,12 +2369,24 @@ logoutButton.addEventListener("click", () => {
   showAuth();
 });
 
+const applyRoleBasedTabVisibility = () => {
+  const canManage = hasManagementAccess();
+  document.querySelectorAll('[data-tab="members"]').forEach((item) => {
+    item.style.display = canManage ? "inline-flex" : "none";
+  });
+  document.querySelectorAll('[data-tab-panel="members"]').forEach((panel) => {
+    panel.style.display = canManage ? "" : "none";
+  });
+};
+
 const activateTab = (tabId) => {
+  const canManage = hasManagementAccess();
+  const safeTabId = tabId === "members" && !canManage ? "boards" : tabId;
   navItems.forEach((item) => {
-    item.classList.toggle("nav__item--active", item.dataset.tab === tabId);
+    item.classList.toggle("nav__item--active", item.dataset.tab === safeTabId);
   });
   tabPanels.forEach((panel) => {
-    panel.classList.toggle("tab-panel--active", panel.dataset.tabPanel === tabId);
+    panel.classList.toggle("tab-panel--active", panel.dataset.tabPanel === safeTabId);
   });
 };
 
@@ -2436,6 +2561,7 @@ deleteBoardButton?.addEventListener("click", deleteCurrentBoard);
 inviteForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!hasManagementAccess()) {
+    setAuthMessage("Нямаш достъп до покани.");
     return;
   }
   const formData = new FormData(inviteForm);
@@ -2509,6 +2635,7 @@ inviteForm?.addEventListener("submit", async (event) => {
   setAuthMessage("Поканата е създадена успешно.");
   renderInvites();
   renderMyInvites();
+  renderMembersInvitesSummary();
 });
 
 inviteCopyLinkButton?.addEventListener("click", async () => {
@@ -2557,8 +2684,12 @@ groupMembersModal?.addEventListener("click", (event) => {
   }
 });
 
-formEl.addEventListener("submit", (event) => {
+formEl.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (!canCreateCards()) {
+    setAuthMessage("Нямаш право да създаваш карти.");
+    return;
+  }
   const formData = new FormData(formEl);
   const currentUser = loadCurrentUser();
   const selectedTeamIds = getSelectedValues(taskTeamIdsSelect);
@@ -2590,6 +2721,23 @@ formEl.addEventListener("submit", (event) => {
     accountId: currentUser?.accountId,
     boardId: getCurrentBoardId(),
   };
+  const apiResult = await apiRequest("/api/cards", {
+    method: "POST",
+    body: JSON.stringify({
+      accountId: currentUser?.accountId,
+      requesterUserId: currentUser?.id,
+      boardId: getCurrentBoardId(),
+      listId: cardColumn,
+      title: newTask.title,
+      description: newTask.description,
+      due: newTask.due,
+      level: newTask.level,
+    }),
+  });
+  if (!apiResult?.ok && apiResult?.data?.message === "Forbidden") {
+    setAuthMessage("403 Forbidden: Нямаш право за това действие.");
+    return;
+  }
   const updated = [newTask, ...tasks];
   saveTasks(updated);
   renderBoard(getVisibleTasks());
@@ -2605,6 +2753,7 @@ boardTeamFilter?.addEventListener("change", () => {
 });
 
 const initialTasks = getVisibleTasks();
+applyRoleBasedTabVisibility();
 renderBoardSelector();
 loadTheme();
 loadDensity();
@@ -2612,6 +2761,7 @@ renderBoard(initialTasks);
 renderTeams();
 renderInvites();
 renderMyInvites();
+renderMembersInvitesSummary();
 renderCalendar();
 updateReports();
 

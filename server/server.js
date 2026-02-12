@@ -33,6 +33,14 @@ const hashPassword = (password) => createHash("sha256").update(password).digest(
 const normalizeEmail = (email = "") => email.trim().toLowerCase();
 const normalizeText = (value = "") => value.trim();
 
+const normalizeWorkspaceRole = (role = "") => {
+  const normalized = normalizeText(role).toLowerCase();
+  if (["owner", "собственик"].includes(normalized)) return "Owner";
+  if (normalized === "admin") return "Admin";
+  if (normalized === "viewer") return "Viewer";
+  return "Member";
+};
+
 
 const EMAIL_PROVIDER = normalizeText(process.env.EMAIL_PROVIDER || "resend").toLowerCase();
 const EMAIL_FROM = normalizeText(process.env.EMAIL_FROM || "");
@@ -193,6 +201,7 @@ const ensureDbShape = (db) => {
   db.verificationTokens ??= [];
   db.invites ??= [];
   db.notifications ??= [];
+  db.cards ??= [];
 
   db.accounts = db.accounts.map((account) => {
     const ownerUserId = account.ownerUserId ?? null;
@@ -222,6 +231,65 @@ const send = (res, statusCode, payload) => {
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
   });
   res.end(JSON.stringify(payload));
+};
+
+const getUserRoleInAccount = (db, account, userId) => {
+  if (!account || !userId) {
+    return null;
+  }
+
+  if (account.ownerUserId === userId) {
+    return "Owner";
+  }
+
+  const workspaceRoles = (account.workspaces ?? []).flatMap((workspace) => workspace.memberRoles ?? []);
+  const workspaceRole = workspaceRoles.find((member) => member.userId === userId)?.role;
+  if (workspaceRole) {
+    return normalizeWorkspaceRole(workspaceRole);
+  }
+
+  const accountMemberRole = (account.members ?? []).find((member) => (member.userId ?? member.id) === userId)?.role;
+  if (accountMemberRole) {
+    return normalizeWorkspaceRole(accountMemberRole);
+  }
+
+  const userRole = db.users.find((user) => user.id === userId)?.role;
+  return userRole ? normalizeWorkspaceRole(userRole) : null;
+};
+
+const isAccountMember = (db, account, userId) => {
+  const user = db.users.find((item) => item.id === userId);
+  if (!user || !account) {
+    return false;
+  }
+  if (account.ownerUserId === userId) {
+    return true;
+  }
+  if (user.accountId === account.id) {
+    return true;
+  }
+  return (account.members ?? []).some((member) => (member.userId ?? member.id) === userId);
+};
+
+const canManageMembers = (db, account, userId) => {
+  const role = getUserRoleInAccount(db, account, userId);
+  return role === "Owner" || role === "Admin";
+};
+
+const canCreateCard = (db, account, userId) => {
+  const role = getUserRoleInAccount(db, account, userId);
+  return role === "Owner" || role === "Admin" || role === "Member";
+};
+
+const canMutateCard = (db, account, userId, card) => {
+  const role = getUserRoleInAccount(db, account, userId);
+  if (role === "Owner" || role === "Admin") {
+    return true;
+  }
+  if (role === "Member") {
+    return card?.createdBy === userId;
+  }
+  return false;
 };
 
 const readBody = async (req) => {
@@ -607,8 +675,23 @@ const server = createServer(async (req, res) => {
   if (requestUrl.pathname === "/api/invites" && req.method === "GET") {
     const accountId = normalizeText(requestUrl.searchParams.get("accountId") ?? "");
     const email = normalizeEmail(requestUrl.searchParams.get("email") ?? "");
+    const requesterUserId = normalizeText(requestUrl.searchParams.get("requesterUserId") ?? "");
 
     const db = ensureDbShape(await readDb());
+
+    if (accountId && requesterUserId) {
+      const account = db.accounts.find((item) => item.id === accountId);
+      if (!account) {
+        send(res, 404, { message: "Фирмата не е намерена." });
+        return;
+      }
+
+      if (!canManageMembers(db, account, requesterUserId)) {
+        send(res, 403, { message: "Forbidden" });
+        return;
+      }
+    }
+
     const invites = db.invites.filter((invite) => {
       const byAccount = accountId ? invite.accountId === accountId : false;
       const byEmail = email ? normalizeEmail(invite.email) === email : false;
@@ -624,7 +707,7 @@ const server = createServer(async (req, res) => {
     const accountId = normalizeText(body.accountId);
     const invitedByUserId = normalizeText(body.invitedByUserId);
     const email = normalizeEmail(body.email);
-    const role = normalizeText(body.role || "Member");
+    const role = normalizeWorkspaceRole(body.role || "Member");
 
     if (!accountId || !email) {
       send(res, 400, { message: "Липсват данни за покана." });
@@ -635,6 +718,11 @@ const server = createServer(async (req, res) => {
     const account = db.accounts.find((item) => item.id === accountId);
     if (!account) {
       send(res, 404, { message: "Фирмата не е намерена." });
+      return;
+    }
+
+    if (!canManageMembers(db, account, invitedByUserId)) {
+      send(res, 403, { message: "Forbidden" });
       return;
     }
 
@@ -661,6 +749,154 @@ const server = createServer(async (req, res) => {
     db.invites.unshift(invite);
     await writeDb(db);
     send(res, 201, { invite });
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/workspaces/members-summary" && req.method === "GET") {
+    const accountId = normalizeText(requestUrl.searchParams.get("accountId") ?? "");
+    const requesterUserId = normalizeText(requestUrl.searchParams.get("requesterUserId") ?? "");
+
+    if (!accountId || !requesterUserId) {
+      send(res, 400, { message: "Липсват accountId/requesterUserId." });
+      return;
+    }
+
+    const db = ensureDbShape(await readDb());
+    const account = db.accounts.find((item) => item.id === accountId);
+    if (!account) {
+      send(res, 404, { message: "Фирмата не е намерена." });
+      return;
+    }
+
+    if (!canManageMembers(db, account, requesterUserId)) {
+      send(res, 403, { message: "Forbidden" });
+      return;
+    }
+
+    const pendingInvites = db.invites
+      .filter((invite) => invite.accountId === accountId && !invite.acceptedAt && !invite.declinedAt && !invite.revokedAt && invite.expiresAt > Date.now())
+      .map((invite) => ({
+        id: invite.id,
+        email: invite.email,
+        role: normalizeWorkspaceRole(invite.role),
+        invitedByUserId: invite.invitedByUserId ?? null,
+        createdAt: invite.createdAt ?? (Number.parseInt((invite.id || "").split("-")[1], 10) || Date.now()),
+      }));
+
+    const members = (account.members ?? []).map((member) => {
+      const memberUserId = member.userId ?? member.id ?? null;
+      const linkedUser = memberUserId ? db.users.find((user) => user.id === memberUserId) : null;
+      return {
+        id: member.id ?? memberUserId,
+        userId: memberUserId,
+        name: member.name ?? linkedUser?.name ?? member.email ?? "Потребител",
+        email: member.email ?? linkedUser?.email ?? "",
+        role: normalizeWorkspaceRole(member.role ?? linkedUser?.role ?? "Member"),
+        joinedAt: linkedUser?.createdAt ?? null,
+      };
+    });
+
+    send(res, 200, {
+      pendingCount: pendingInvites.length,
+      pendingInvites,
+      acceptedMembers: members,
+    });
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/cards" && req.method === "POST") {
+    const body = await readBody(req);
+    const accountId = normalizeText(body.accountId);
+    const requesterUserId = normalizeText(body.requesterUserId);
+    const boardId = normalizeText(body.boardId);
+    const listId = normalizeText(body.listId || body.column);
+    const title = normalizeText(body.title);
+
+    if (!accountId || !requesterUserId || !boardId || !listId || !title) {
+      send(res, 400, { message: "Липсват задължителни полета за карта." });
+      return;
+    }
+
+    const db = ensureDbShape(await readDb());
+    const account = db.accounts.find((item) => item.id === accountId);
+    if (!account) {
+      send(res, 404, { message: "Фирмата не е намерена." });
+      return;
+    }
+
+    if (!isAccountMember(db, account, requesterUserId) || !canCreateCard(db, account, requesterUserId)) {
+      send(res, 403, { message: "Forbidden" });
+      return;
+    }
+
+    const now = Date.now();
+    const card = {
+      id: `card-${now}`,
+      accountId,
+      boardId,
+      listId,
+      title,
+      description: normalizeText(body.description || ""),
+      due: normalizeText(body.due || ""),
+      level: normalizeText(body.level || "L2"),
+      createdBy: requesterUserId,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    db.cards.unshift(card);
+    await writeDb(db);
+    send(res, 201, { card });
+    return;
+  }
+
+  if (requestUrl.pathname.startsWith("/api/cards/") && ["PATCH", "DELETE"].includes(req.method ?? "")) {
+    const cardId = normalizeText(requestUrl.pathname.split("/").pop() ?? "");
+    const body = req.method === "PATCH" ? await readBody(req) : {};
+    const requesterUserId = normalizeText((body?.requesterUserId ?? requestUrl.searchParams.get("requesterUserId") ?? ""));
+
+    if (!cardId || !requesterUserId) {
+      send(res, 400, { message: "Липсва cardId/requesterUserId." });
+      return;
+    }
+
+    const db = ensureDbShape(await readDb());
+    const card = db.cards.find((item) => item.id === cardId);
+    if (!card) {
+      send(res, 404, { message: "Картата не е намерена." });
+      return;
+    }
+
+    const account = db.accounts.find((item) => item.id === card.accountId);
+    if (!account || !isAccountMember(db, account, requesterUserId) || !canMutateCard(db, account, requesterUserId, card)) {
+      send(res, 403, { message: "Forbidden" });
+      return;
+    }
+
+    if (req.method === "DELETE") {
+      db.cards = db.cards.filter((item) => item.id !== cardId);
+      await writeDb(db);
+      send(res, 200, { ok: true });
+      return;
+    }
+
+    const now = Date.now();
+    db.cards = db.cards.map((item) =>
+      item.id === cardId
+        ? {
+            ...item,
+            title: normalizeText(body.title || item.title),
+            description: normalizeText(body.description ?? item.description ?? ""),
+            due: normalizeText(body.due ?? item.due ?? ""),
+            level: normalizeText(body.level ?? item.level ?? "L2"),
+            listId: normalizeText(body.listId ?? item.listId),
+            updatedAt: now,
+          }
+        : item
+    );
+
+    await writeDb(db);
+    send(res, 200, { card: db.cards.find((item) => item.id === cardId) });
     return;
   }
 
