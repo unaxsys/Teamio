@@ -927,6 +927,48 @@ const startInvitesPolling = () => {
   // no-op: refresh става само при mount/login и при връщане към таба
 };
 
+const refreshInviteUi = async () => {
+  await syncInvitesFromApi();
+  renderMyInvites();
+  renderMembersInvitesSummary();
+};
+
+const normalizeInviteFormFields = () => {
+  if (!inviteForm) {
+    return;
+  }
+  const duplicatedUserIdFields = inviteForm.querySelectorAll('input[name="invitedUserId"]');
+  duplicatedUserIdFields.forEach((field, index) => {
+    if (index === 0) {
+      return;
+    }
+    const label = field.closest("label");
+    if (label) {
+      label.remove();
+    } else {
+      field.remove();
+    }
+  });
+};
+
+const stopInvitesPolling = () => {
+  if (!invitesPollTimer) {
+    return;
+  }
+  clearInterval(invitesPollTimer);
+  invitesPollTimer = null;
+};
+
+const startInvitesPolling = () => {
+  stopInvitesPolling();
+  invitesPollTimer = setInterval(() => {
+    if (!loadCurrentUser()) {
+      return;
+    }
+    void refreshInviteUi();
+  }, 10000);
+};
+
 const hashPassword = async (password) => {
   const subtleCrypto = globalThis.crypto?.subtle;
   if (!subtleCrypto) {
