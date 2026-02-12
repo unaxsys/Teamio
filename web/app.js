@@ -833,12 +833,13 @@ const syncInvitesFromApi = async () => {
   const myInvitesParams = new URLSearchParams();
   if (user.id) {
     myInvitesParams.set("userId", user.id);
-  } else if (user.email) {
+  }
+  if (user.email) {
     myInvitesParams.set("email", normalizeEmail(user.email));
   }
 
   if (myInvitesParams.toString()) {
-    const myInvitesResult = await apiRequest(`/api/invites?${myInvitesParams.toString()}`);
+    const myInvitesResult = await apiRequest(`/api/invites/inbox?${myInvitesParams.toString()}`);
     if (myInvitesResult?.ok && Array.isArray(myInvitesResult.data?.invites)) {
       myInvitesResult.data.invites.forEach((invite) => {
         if (invite?.id) {
