@@ -651,6 +651,10 @@ const hasPermission = (scope, action) => {
 };
 
 const hasManagementAccess = () => hasPermission("Workspace", "members") || hasPermission("Workspace", "boards");
+const canManageDefaultBoard = () => {
+  const role = normalizeRole(loadCurrentUser()?.role ?? "Member");
+  return ["Owner", "Admin", "Manager"].includes(role);
+};
 
 const canCreateCards = () => hasPermission("Board", "cards");
 const canManageBoardStructure = () => hasPermission("Board", "lists");
@@ -693,12 +697,19 @@ const applyManagementAccessUi = () => {
     boardTeamFilter.title = hasAccess ? "" : "Само администратор/собственик може да определя филтъра.";
   }
 
-  [createBoardButton, renameBoardButton, deleteBoardButton].forEach((button) => {
+  if (createBoardButton) {
+    createBoardButton.disabled = !hasAccess;
+    createBoardButton.title = hasAccess ? "" : "Само администратор/собственик може да създава бордове.";
+  }
+
+  const currentBoardId = getCurrentBoardId();
+  const canManageCurrentBoard = hasAccess || (currentBoardId === "board-default" && canManageDefaultBoard());
+  [renameBoardButton, deleteBoardButton].forEach((button) => {
     if (!button) {
       return;
     }
-    button.disabled = !hasAccess;
-    button.title = hasAccess ? "" : "Само администратор/собственик може да управлява бордове.";
+    button.disabled = !canManageCurrentBoard;
+    button.title = canManageCurrentBoard ? "" : "Само собственик, администратор или мениджър може да управлява основния борд.";
   });
 
   if (newColumnButton) {
@@ -3055,6 +3066,7 @@ densityButtons.forEach((button) => {
 
 boardSelector?.addEventListener("change", () => {
   setCurrentBoardId(boardSelector.value);
+  applyManagementAccessUi();
   renderBoardSelector();
   renderBoard(getVisibleTasks());
   renderInvites();
@@ -3149,13 +3161,14 @@ createBoardButton?.addEventListener("click", () => {
 });
 
 const renameCurrentBoard = () => {
-  if (!hasManagementAccess()) {
-    return;
-  }
   const currentBoardId = getCurrentBoardId();
   const boards = loadBoards();
   const currentBoard = boards.find((board) => board.id === currentBoardId);
   if (!currentBoard) {
+    return;
+  }
+  const canManageCurrentBoard = currentBoard.id === "board-default" ? canManageDefaultBoard() : hasManagementAccess();
+  if (!canManageCurrentBoard) {
     return;
   }
   const nextName = window.prompt("Ново име на борда:", currentBoard.name);
@@ -3168,9 +3181,6 @@ const renameCurrentBoard = () => {
 };
 
 const deleteCurrentBoard = () => {
-  if (!hasManagementAccess()) {
-    return;
-  }
   const boards = loadBoards();
   if (boards.length <= 1) {
     setAuthMessage("Трябва да остане поне един борд.");
@@ -3181,8 +3191,8 @@ const deleteCurrentBoard = () => {
   if (!currentBoard) {
     return;
   }
-  if (currentBoard.id === "board-default") {
-    setAuthMessage("Основният борд не може да бъде изтрит.");
+  const canManageCurrentBoard = currentBoard.id === "board-default" ? canManageDefaultBoard() : hasManagementAccess();
+  if (!canManageCurrentBoard) {
     return;
   }
   const confirmed = window.confirm(`Изтриване на борд „${currentBoard.name}“?`);
