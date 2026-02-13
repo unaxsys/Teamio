@@ -159,7 +159,7 @@
         </div>
       </aside>
       <main class="main">
-        <header class="header">
+        <header class="header board-global-header">
           <div>
             <h1>Работно табло</h1>
             <p>Организирай задачите си с един поглед.</p>
@@ -176,36 +176,6 @@
           </div>
         </header>
 
-        <section class="overview tab-panel tab-panel--active" data-tab-panel="boards">
-          <div class="board-topbar">
-            <div class="board-topbar__title-wrap">
-              <h2 id="current-board-name">Моето табло</h2>
-              <span class="board-topbar__visibility">Workspace</span>
-            </div>
-            <div class="board-topbar__actions">
-              <input
-                type="search"
-                id="board-search"
-                placeholder="Търси задачи..."
-                aria-label="Търси в таблото"
-              />
-              <button type="button" class="ghost board-icon-button" id="board-menu-button">⋯ Меню</button>
-            </div>
-          </div>
-          <div class="stat">
-            <h4>Активни задачи</h4>
-            <p id="stat-active">0</p>
-          </div>
-          <div class="stat">
-            <h4>Хора във фирмата</h4>
-            <p id="stat-team-size">0</p>
-          </div>
-          <div class="stat">
-            <h4>Срокове тази седмица</h4>
-            <p id="stat-due">0</p>
-          </div>
-        </section>
-
         <aside class="board-side-menu" id="board-side-menu" aria-hidden="true">
           <div class="board-side-menu__header">
             <h3>Меню</h3>
@@ -221,7 +191,53 @@
         </aside>
         <div class="board-menu-overlay" id="board-menu-overlay" aria-hidden="true"></div>
 
-        <section class="board tab-panel tab-panel--active" id="board" data-tab-panel="boards"></section>
+        <div class="board-stage tab-panel tab-panel--active" data-tab-panel="boards">
+          <section class="overview">
+            <div class="board-meta">
+              <div class="board-topbar">
+                <div class="board-topbar__title-wrap">
+                  <h2 id="current-board-name">Моето табло</h2>
+                  <span class="board-topbar__visibility">Workspace</span>
+                </div>
+                <div class="board-topbar__actions">
+                  <input
+                    type="search"
+                    id="board-search"
+                    placeholder="Търси задачи..."
+                    aria-label="Търси в таблото"
+                  />
+                  <button type="button" class="ghost board-icon-button" id="board-menu-button">⋯ Меню</button>
+                  <button type="button" class="ghost board-icon-button" id="column-picker-toggle">Колони</button>
+                  <button type="button" class="ghost board-icon-button" id="board-compact-toggle" aria-pressed="false">Compact</button>
+                </div>
+              </div>
+              <div class="board-tools">
+                <div class="column-picker" id="column-picker" hidden>
+                  <p class="column-picker__title">Видими колони</p>
+                  <div class="column-picker__list" id="column-picker-list"></div>
+                </div>
+              </div>
+              <div class="board-stats-row">
+                <div class="stat">
+                  <h4>Активни задачи</h4>
+                  <p id="stat-active">0</p>
+                </div>
+                <div class="stat">
+                  <h4>Хора във фирмата</h4>
+                  <p id="stat-team-size">0</p>
+                </div>
+                <div class="stat">
+                  <h4>Срокове тази седмица</h4>
+                  <p id="stat-due">0</p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <div class="board-canvas">
+            <section class="board" id="board"></section>
+          </div>
+        </div>
 
         <section class="tab-panel" data-tab-panel="teams">
           <div class="panel-card">
