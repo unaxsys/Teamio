@@ -674,24 +674,29 @@ const loadApiBase = () => {
   const currentOrigin = window.location.origin;
   const { protocol, hostname } = window.location;
 
-  const buildApiOriginFromCurrentHost = (port = "8787") => {
+  const buildApiOriginFromCurrentHost = (port = "") => {
     const normalizedPort = normalizeText(port);
     return `${protocol}//${hostname}${normalizedPort ? `:${normalizedPort}` : ""}`;
   };
 
   if (!storedBase) {
-    return buildApiOriginFromCurrentHost();
+    if (["localhost", "127.0.0.1"].includes(hostname)) {
+      return buildApiOriginFromCurrentHost("8787");
+    }
+    return currentOrigin;
   }
 
   try {
     const parsed = new URL(storedBase, currentOrigin);
     if (window.location.hostname !== "localhost" && ["localhost", "127.0.0.1"].includes(parsed.hostname)) {
-      const parsedPort = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
-      return buildApiOriginFromCurrentHost(parsedPort);
+      return currentOrigin;
     }
     return parsed.origin;
   } catch {
-    return buildApiOriginFromCurrentHost();
+    if (["localhost", "127.0.0.1"].includes(hostname)) {
+      return buildApiOriginFromCurrentHost("8787");
+    }
+    return currentOrigin;
   }
 };
 
@@ -708,7 +713,11 @@ const apiRequest = async (path, options = {}) => {
     }
     return { ok: true, data };
   } catch (error) {
-    return { ok: false, data: { message: "Сървърът не е достъпен." } };
+    const isGithubPages = window.location.hostname.endsWith("github.io");
+    const hint = isGithubPages
+      ? ` Нужен е външен API сървър. Задай го така: localStorage.setItem("teamio-api-base", "https://your-api-domain.com") и презареди.`
+      : "";
+    return { ok: false, data: { message: `Сървърът не е достъпен (${base}).${hint}` } };
   }
 };
 
