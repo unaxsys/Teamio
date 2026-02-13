@@ -1825,13 +1825,7 @@ const renderBoard = (tasks) => {
       btn.disabled = !canManageLists;
       btn.style.display = canManageLists ? "inline-flex" : "none";
     });
-    actions.append(count, dragButton, renameButton, limitButton, pinButton);
-
-    if (isPinned) {
-      columnEl.classList.add("column--pinned");
-      const pinIndex = pinnedColumnIds.indexOf(column.id);
-      columnEl.style.setProperty("--pin-left", `${16 + (pinIndex * 336)}px`);
-    }
+    actions.append(count, dragButton, renameButton, limitButton);
 
     header.append(titleWrap, actions);
     columnEl.append(header);
