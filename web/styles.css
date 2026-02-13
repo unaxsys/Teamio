@@ -1632,7 +1632,7 @@ body {
 .column__rename,
 .column__limit,
 .column__drag {
-  min-height: 40px;
+  min-height: 0px;
   transition: all 0.16s ease;
 }
 
