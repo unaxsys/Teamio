@@ -145,12 +145,14 @@ const defaultBoards = [{ id: "board-default", name: "Основен борд", c
 const ensureDefaultBoard = (boards) => {
   const safeBoards = Array.isArray(boards) ? boards : [];
   const hasDefaultBoard = safeBoards.some((board) => board?.id === "board-default");
-  const normalizedBoards = safeBoards.map((board) => {
-    if (board?.id !== "board-default") {
-      return board;
-    }
-    return normalizeBoard({ ...board, workspaceId: null });
-  });
+  const normalizedBoards = safeBoards
+    .map((board) => {
+      if (board?.id !== "board-default") {
+        return board;
+      }
+      return normalizeBoard({ ...board, workspaceId: null });
+    })
+    .filter((board, index, list) => board?.id && list.findIndex((entry) => entry?.id === board.id) === index);
   if (hasDefaultBoard) {
     return normalizedBoards;
   }
@@ -374,7 +376,8 @@ const saveBoards = (boards) => {
     persistAndSync("teamio-boards", JSON.stringify(safeBoards));
     return;
   }
-  const preserved = existing.filter((board) => board.workspaceId && board.workspaceId !== workspace.id);
+  const safeBoardIds = new Set(safeBoards.map((board) => board.id));
+  const preserved = existing.filter((board) => board.workspaceId && board.workspaceId !== workspace.id && !safeBoardIds.has(board.id));
   persistAndSync("teamio-boards", JSON.stringify([...preserved, ...safeBoards]));
 };
 
