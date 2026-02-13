@@ -2937,7 +2937,7 @@ taskDetailsForm?.addEventListener("submit", (event) => {
     });
   });
   saveTasks(updatedTasks);
-  renderBoard(updatedTasks);
+  renderBoard(getVisibleTasks());
   updateReports();
   renderCalendar();
   closeModal(taskDetailsModal);
