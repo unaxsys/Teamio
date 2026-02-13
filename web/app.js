@@ -1463,7 +1463,8 @@ const savePinnedColumnsPreference = (columnIds) => {
 };
 
 const ensureBoardColumnPreferences = (columns) => {
-  visibleColumnIds = loadVisibleColumnsPreference(columns);
+  // Винаги показваме всички колони, за да не изчезват задачи при стари/несъвместими localStorage филтри.
+  visibleColumnIds = columns.map((column) => column.id);
   pinnedColumnIds = loadPinnedColumnsPreference(columns).filter((id) => visibleColumnIds.includes(id));
   saveVisibleColumnsPreference(visibleColumnIds);
   savePinnedColumnsPreference(pinnedColumnIds);
@@ -1480,21 +1481,9 @@ const renderColumnPicker = (columns) => {
 
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
-    checkbox.checked = visibleColumnIds.includes(column.id);
-    checkbox.addEventListener("change", () => {
-      if (checkbox.checked) {
-        visibleColumnIds = [...new Set([...visibleColumnIds, column.id])];
-      } else {
-        visibleColumnIds = visibleColumnIds.filter((id) => id !== column.id);
-        pinnedColumnIds = pinnedColumnIds.filter((id) => id !== column.id);
-      }
-      if (visibleColumnIds.length === 0) {
-        visibleColumnIds = [column.id];
-      }
-      saveVisibleColumnsPreference(visibleColumnIds);
-      savePinnedColumnsPreference(pinnedColumnIds);
-      renderBoard(getVisibleTasks());
-    });
+    checkbox.checked = true;
+    checkbox.disabled = true;
+    checkbox.title = "Всички колони са видими";
 
     const text = document.createElement("span");
     text.textContent = column.title;
