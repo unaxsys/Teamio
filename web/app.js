@@ -292,6 +292,14 @@ const getCurrentWorkspace = () => {
   if (!account) {
     return null;
   }
+  const currentUser = loadCurrentUser();
+  const preferredWorkspaceId = normalizeText(currentUser?.workspaceId ?? "");
+  if (preferredWorkspaceId) {
+    const preferredWorkspace = (account.workspaces ?? []).find((workspace) => workspace.id === preferredWorkspaceId);
+    if (preferredWorkspace) {
+      return preferredWorkspace;
+    }
+  }
   return account.workspaces?.[0] ?? null;
 };
 

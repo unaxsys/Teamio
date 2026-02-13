@@ -806,12 +806,20 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    const account = db.accounts.find((item) => item.id === user.accountId);
+    const workspaces = account?.workspaces ?? [];
+    const membershipWorkspace = workspaces.find((workspace) =>
+      (workspace.memberRoles ?? []).some((member) => member.userId === user.id)
+    );
+    const workspaceId = membershipWorkspace?.id ?? workspaces[0]?.id ?? null;
+
     send(res, 200, {
       user: {
         id: user.id,
         name: user.name,
         email: user.email,
         accountId: user.accountId,
+        workspaceId,
         role: user.role,
         teamIds: user.teamIds ?? [],
       },
