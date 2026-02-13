@@ -266,7 +266,7 @@ const loadPreferences = () => {
   };
   const stored = localStorage.getItem("teamio-preferences");
   if (!stored) {
-    persistAndSync("teamio-preferences", JSON.stringify(defaults));
+    localStorage.setItem("teamio-preferences", JSON.stringify(defaults));
     return defaults;
   }
   return { ...defaults, ...JSON.parse(stored) };
