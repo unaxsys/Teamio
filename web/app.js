@@ -83,6 +83,7 @@ const reportVelocity = document.getElementById("report-velocity");
 const taskDetailsModal = document.getElementById("task-details-modal");
 const taskDetailsForm = document.getElementById("task-details-form");
 const closeTaskDetailsButton = document.getElementById("close-task-details");
+const taskDetailsAssigneeSelect = document.getElementById("task-details-assignee");
 const groupTiles = document.querySelectorAll(".panel-tile--button");
 const groupMembersModal = document.getElementById("group-members-modal");
 const groupMembersTitle = document.getElementById("group-members-title");
@@ -683,6 +684,40 @@ const canEditTask = (task) => {
     return true;
   }
   return normalizeRole(user.role ?? "Member") === "Member" && task.createdBy === user.id;
+};
+
+const canAssignTask = () => {
+  const role = normalizeRole(loadCurrentUser()?.role ?? "Member");
+  return ["Owner", "Admin", "Manager"].includes(role);
+};
+
+const getAssignableMembers = () => {
+  const account = getCurrentAccount();
+  return (account?.members ?? []).filter((member) => Boolean(member?.id));
+};
+
+const renderTaskDetailsAssigneeOptions = (task) => {
+  if (!taskDetailsAssigneeSelect) {
+    return;
+  }
+
+  const members = getAssignableMembers();
+  const currentAssignedId = Array.isArray(task?.assignedUserIds) ? (task.assignedUserIds[0] ?? "") : "";
+  taskDetailsAssigneeSelect.innerHTML = "";
+
+  const emptyOption = document.createElement("option");
+  emptyOption.value = "";
+  emptyOption.textContent = "Няма";
+  taskDetailsAssigneeSelect.append(emptyOption);
+
+  members.forEach((member) => {
+    const option = document.createElement("option");
+    option.value = member.id;
+    option.textContent = `${member.name} (${member.role})`;
+    taskDetailsAssigneeSelect.append(option);
+  });
+
+  taskDetailsAssigneeSelect.value = currentAssignedId;
 };
 
 
@@ -1496,9 +1531,15 @@ const openTaskDetails = (taskId) => {
   taskDetailsForm.querySelector('input[name="due"]').value = task.due ?? "";
   taskDetailsForm.querySelector('select[name="level"]').value = task.level ?? "L2";
   taskDetailsForm.querySelector('input[name="completed"]').checked = Boolean(task.completed);
+  renderTaskDetailsAssigneeOptions(task);
   const editable = canEditTask(task);
+  const assignable = canAssignTask();
   Array.from(taskDetailsForm.querySelectorAll("input, textarea, select, button[type='submit']")).forEach((control) => {
     if (control.name === "taskId") return;
+    if (control.name === "assignedUserId") {
+      control.disabled = !assignable;
+      return;
+    }
     control.disabled = !editable;
   });
   openModal(taskDetailsModal);
@@ -1539,6 +1580,15 @@ const createCard = (task, columnColor) => {
 
   const due = document.createElement("span");
   due.textContent = task.due ? new Date(task.due).toLocaleDateString("bg-BG") : "Без срок";
+
+  const assignedUserId = Array.isArray(task.assignedUserIds) ? task.assignedUserIds[0] : "";
+  if (assignedUserId) {
+    const assignee = getAssignableMembers().find((member) => member.id === assignedUserId);
+    const assigneeTag = document.createElement("span");
+    assigneeTag.className = "card__tag";
+    assigneeTag.textContent = `👤 ${assignee?.name ?? "Присвоена"}`;
+    footer.append(assigneeTag);
+  }
 
   footer.append(tag, due);
   card.append(titleRow, desc, footer);
@@ -2765,6 +2815,8 @@ taskDetailsForm?.addEventListener("submit", (event) => {
     setAuthMessage("Нямаш право да редактираш тази карта.");
     return;
   }
+  const selectedAssigneeId = formData.get("assignedUserId")?.toString().trim() ?? "";
+  const allowAssignmentUpdate = canAssignTask();
   const updatedTasks = tasks.map((task) => {
     if (task.id !== taskId) {
       return task;
@@ -2775,6 +2827,7 @@ taskDetailsForm?.addEventListener("submit", (event) => {
       description: formData.get("description")?.toString() ?? "",
       due: formData.get("due")?.toString() ?? "",
       level: formData.get("level")?.toString() ?? "L2",
+      assignedUserIds: allowAssignmentUpdate ? (selectedAssigneeId ? [selectedAssigneeId] : []) : (Array.isArray(task.assignedUserIds) ? task.assignedUserIds : []),
       completed: formData.get("completed") === "on",
       status: formData.get("completed") === "on" ? "done" : (task.status ?? "todo"),
       activityLog: [
