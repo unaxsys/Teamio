@@ -559,6 +559,8 @@ body {
   width: 100%;
   scrollbar-gutter: stable;
   cursor: grab;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
 
 .board-canvas--dragging {
@@ -577,7 +579,10 @@ body.is-board-canvas-dragging {
   padding: 0 8px 8px;
 }
 
-.board-canvas::-webkit-scrollbar,
+.board-canvas::-webkit-scrollbar {
+  display: none;
+}
+
 .board::-webkit-scrollbar {
   height: 8px;
 }

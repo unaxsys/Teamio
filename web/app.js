@@ -3250,9 +3250,21 @@ boardSearchInput?.addEventListener("input", () => {
 });
 
 boardCanvasEl?.addEventListener("wheel", (event) => {
-  if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) {
+  if (Math.abs(event.deltaY) <= Math.abs(event.deltaX) || !boardEl) {
     return;
   }
+
+  const boardRect = boardEl.getBoundingClientRect();
+  const pointerInColumnsRow =
+    event.clientY >= boardRect.top &&
+    event.clientY <= boardRect.bottom &&
+    event.clientX >= boardRect.left &&
+    event.clientX <= boardRect.right;
+
+  if (!pointerInColumnsRow) {
+    return;
+  }
+
   boardCanvasEl.scrollLeft += event.deltaY;
   event.preventDefault();
 }, { passive: false });
