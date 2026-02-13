@@ -55,7 +55,7 @@
             Регистрация
           </button>
         </div>
-        <form class="auth-form auth-form--active" id="login-form">
+        <form class="auth-form auth-form--active" id="login-form" method="post">
           <label>
             Имейл
             <input type="email" name="email" placeholder="team@company.com" required />
@@ -68,7 +68,7 @@
           <button type="button" class="link-button" id="forgot-password">Забравена парола?</button>
           <p class="auth-note">Нямаш акаунт? Създай го за секунди.</p>
         </form>
-        <form class="auth-form" id="register-form">
+        <form class="auth-form" id="register-form" method="post">
           <label>
             Име
             <input type="text" name="name" placeholder="Мария Иванова" required />
@@ -92,7 +92,7 @@
     <div class="modal" id="reset-modal">
       <div class="modal__card">
         <h2>Възстановяване на парола</h2>
-        <form id="reset-request-form">
+        <form id="reset-request-form" method="post">
           <label>
             Имейл
             <input type="email" name="email" placeholder="team@company.com" required />
@@ -109,7 +109,7 @@
     <div class="modal" id="new-password-modal">
       <div class="modal__card">
         <h2>Нова парола</h2>
-        <form id="new-password-form">
+        <form id="new-password-form" method="post">
           <input type="hidden" name="token" />
           <label>
             Нова парола
