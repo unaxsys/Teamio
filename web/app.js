@@ -2,6 +2,7 @@ if (!window.__teamioAppInitialized) {
   window.__teamioAppInitialized = true;
 
 const boardEl = document.getElementById("board");
+const boardCanvasEl = document.querySelector(".board-canvas");
 const appEl = document.getElementById("app");
 const authScreenEl = document.getElementById("auth-screen");
 const loginForm = document.getElementById("login-form");
@@ -117,8 +118,17 @@ const menuAddColumnButton = document.getElementById("menu-add-column");
 const menuNewTaskButton = document.getElementById("menu-new-task");
 const menuRenameBoardButton = document.getElementById("menu-rename-board");
 const menuDeleteBoardButton = document.getElementById("menu-delete-board");
+const columnPickerToggleButton = document.getElementById("column-picker-toggle");
+const columnPickerEl = document.getElementById("column-picker");
+const columnPickerListEl = document.getElementById("column-picker-list");
+const boardCompactToggleButton = document.getElementById("board-compact-toggle");
 
 let boardSearchQuery = "";
+let isBoardCanvasDragging = false;
+let boardCanvasDragStartX = 0;
+let boardCanvasDragStartScrollLeft = 0;
+let visibleColumnIds = [];
+let pinnedColumnIds = [];
 
 const ACCOUNT_PLANS = ["Free", "Pro", "Team"];
 const ACCOUNT_STATUSES = ["active", "suspended"];
@@ -1411,6 +1421,7 @@ const applyDensity = (mode) => {
   densityButtons.forEach((button) => {
     button.classList.toggle("density-button--active", button.dataset.density === normalizedMode);
   });
+  boardCompactToggleButton?.setAttribute("aria-pressed", (normalizedMode === "compact").toString());
   persistAndSync("teamio-density", normalizedMode);
 };
 
@@ -1420,6 +1431,67 @@ const loadDensity = () => {
 };
 
 const loadAllTasks = () => JSON.parse(localStorage.getItem("teamio-tasks") ?? "[]");
+
+const getCurrentBoardColumnPreferenceKey = () => `teamio-board-visible-columns-${getCurrentBoardId()}`;
+const getCurrentBoardPinnedPreferenceKey = () => `teamio-board-pinned-columns-${getCurrentBoardId()}`;
+
+const loadVisibleColumnsPreference = (columns) => {
+  const saved = JSON.parse(localStorage.getItem(getCurrentBoardColumnPreferenceKey()) ?? "[]");
+  if (!Array.isArray(saved) || saved.length === 0) {
+    return columns.map((column) => column.id);
+  }
+  const allowed = new Set(columns.map((column) => column.id));
+  const filtered = saved.filter((id) => allowed.has(id));
+  return filtered.length > 0 ? filtered : columns.map((column) => column.id);
+};
+
+const saveVisibleColumnsPreference = (columnIds) => {
+  persistAndSync(getCurrentBoardColumnPreferenceKey(), JSON.stringify(columnIds));
+};
+
+const loadPinnedColumnsPreference = (columns) => {
+  const saved = JSON.parse(localStorage.getItem(getCurrentBoardPinnedPreferenceKey()) ?? "[]");
+  if (!Array.isArray(saved) || saved.length === 0) {
+    return [];
+  }
+  const allowed = new Set(columns.map((column) => column.id));
+  return saved.filter((id) => allowed.has(id)).slice(0, 2);
+};
+
+const savePinnedColumnsPreference = (columnIds) => {
+  persistAndSync(getCurrentBoardPinnedPreferenceKey(), JSON.stringify(columnIds.slice(0, 2)));
+};
+
+const ensureBoardColumnPreferences = (columns) => {
+  // Винаги показваме всички колони, за да не изчезват задачи при стари/несъвместими localStorage филтри.
+  visibleColumnIds = columns.map((column) => column.id);
+  pinnedColumnIds = loadPinnedColumnsPreference(columns).filter((id) => visibleColumnIds.includes(id));
+  saveVisibleColumnsPreference(visibleColumnIds);
+  savePinnedColumnsPreference(pinnedColumnIds);
+};
+
+const renderColumnPicker = (columns) => {
+  if (!columnPickerListEl) {
+    return;
+  }
+  columnPickerListEl.innerHTML = "";
+  columns.forEach((column) => {
+    const row = document.createElement("label");
+    row.className = "column-picker__item";
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = true;
+    checkbox.disabled = true;
+    checkbox.title = "Всички колони са видими";
+
+    const text = document.createElement("span");
+    text.textContent = column.title;
+
+    row.append(checkbox, text);
+    columnPickerListEl.append(row);
+  });
+};
 
 const getNormalizedColumnId = (columnId, boardColumns) => {
   if (!columnId || boardColumns.length === 0) {
@@ -1633,12 +1705,18 @@ const renderBoard = (tasks) => {
   updateBoardTopbar();
   const filteredTasks = getFilteredTasksBySearch(tasks);
   const columns = loadColumns();
+  ensureBoardColumnPreferences(columns);
   const activeCount = filteredTasks.filter((task) => !normalizeTaskCompletion(task).completed).length;
   const dueCount = filteredTasks.filter((task) => task.due).length;
   statActive.textContent = activeCount.toString();
   statDue.textContent = dueCount.toString();
 
-  columns.forEach((column) => {
+  const visibleColumns = columns.filter((column) => visibleColumnIds.includes(column.id));
+  const pinnedColumns = visibleColumns.filter((column) => pinnedColumnIds.includes(column.id));
+  const regularColumns = visibleColumns.filter((column) => !pinnedColumnIds.includes(column.id));
+  const orderedColumns = [...pinnedColumns, ...regularColumns];
+
+  orderedColumns.forEach((column) => {
     const columnEl = document.createElement("section");
     columnEl.className = "column";
     columnEl.dataset.column = column.id;
@@ -1720,6 +1798,7 @@ const renderBoard = (tasks) => {
       btn.style.display = canManageLists ? "inline-flex" : "none";
     });
     actions.append(count, dragButton, renameButton, limitButton);
+
     header.append(titleWrap, actions);
     columnEl.append(header);
 
@@ -1747,13 +1826,13 @@ const renderBoard = (tasks) => {
         if (draggedColumnId === column.id) {
           return;
         }
-        const columns = loadColumns();
-        const sourceIndex = columns.findIndex((entry) => entry.id === draggedColumnId);
-        const targetIndex = columns.findIndex((entry) => entry.id === column.id);
+        const boardColumns = loadColumns();
+        const sourceIndex = boardColumns.findIndex((entry) => entry.id === draggedColumnId);
+        const targetIndex = boardColumns.findIndex((entry) => entry.id === column.id);
         if (sourceIndex === -1 || targetIndex === -1) {
           return;
         }
-        const nextColumns = [...columns];
+        const nextColumns = [...boardColumns];
         const [moved] = nextColumns.splice(sourceIndex, 1);
         nextColumns.splice(targetIndex, 0, moved);
         saveColumns(nextColumns);
@@ -1794,13 +1873,14 @@ const renderBoard = (tasks) => {
   });
 
   columnSelect.innerHTML = "";
-  columns.forEach((column) => {
+  orderedColumns.forEach((column) => {
     const option = document.createElement("option");
     option.value = column.id;
     option.textContent = column.title;
     columnSelect.append(option);
   });
 
+  renderColumnPicker(columns);
   updateReports();
 };
 
@@ -2840,7 +2920,7 @@ taskDetailsForm?.addEventListener("submit", (event) => {
     });
   });
   saveTasks(updatedTasks);
-  renderBoard(updatedTasks);
+  renderBoard(getVisibleTasks());
   updateReports();
   renderCalendar();
   closeModal(taskDetailsModal);
@@ -3141,6 +3221,57 @@ boardSearchInput?.addEventListener("input", () => {
   renderBoard(getVisibleTasks());
 });
 
+boardCanvasEl?.addEventListener("wheel", (event) => {
+  if (Math.abs(event.deltaY) <= Math.abs(event.deltaX) || !boardEl) {
+    return;
+  }
+
+  const boardRect = boardEl.getBoundingClientRect();
+  const pointerInColumnsRow =
+    event.clientY >= boardRect.top &&
+    event.clientY <= boardRect.bottom &&
+    event.clientX >= boardRect.left &&
+    event.clientX <= boardRect.right;
+
+  if (!pointerInColumnsRow) {
+    return;
+  }
+
+  boardCanvasEl.scrollLeft += event.deltaY;
+  event.preventDefault();
+}, { passive: false });
+
+boardCanvasEl?.addEventListener("mousedown", (event) => {
+  if (event.button != 0) {
+    return;
+  }
+  if (event.target.closest("button, input, textarea, select, a, label, [draggable='true']")) {
+    return;
+  }
+  isBoardCanvasDragging = true;
+  boardCanvasDragStartX = event.pageX;
+  boardCanvasDragStartScrollLeft = boardCanvasEl.scrollLeft;
+  boardCanvasEl.classList.add("board-canvas--dragging");
+  document.body.classList.add("is-board-canvas-dragging");
+});
+
+window.addEventListener("mousemove", (event) => {
+  if (!isBoardCanvasDragging || !boardCanvasEl) {
+    return;
+  }
+  const delta = event.pageX - boardCanvasDragStartX;
+  boardCanvasEl.scrollLeft = boardCanvasDragStartScrollLeft - delta;
+});
+
+window.addEventListener("mouseup", () => {
+  if (!isBoardCanvasDragging || !boardCanvasEl) {
+    return;
+  }
+  isBoardCanvasDragging = false;
+  boardCanvasEl.classList.remove("board-canvas--dragging");
+  document.body.classList.remove("is-board-canvas-dragging");
+});
+
 boardFilterButton?.addEventListener("click", () => {
   activateTab("settings");
   document.getElementById("board-team-filter")?.focus();
@@ -3148,6 +3279,24 @@ boardFilterButton?.addEventListener("click", () => {
 
 boardMenuButton?.addEventListener("click", () => {
   toggleBoardMenu(true);
+});
+
+columnPickerToggleButton?.addEventListener("click", () => {
+  if (!columnPickerEl) {
+    return;
+  }
+  const isHidden = columnPickerEl.hasAttribute("hidden");
+  if (isHidden) {
+    columnPickerEl.removeAttribute("hidden");
+  } else {
+    columnPickerEl.setAttribute("hidden", "hidden");
+  }
+});
+
+boardCompactToggleButton?.addEventListener("click", () => {
+  const isCompact = document.body.classList.contains("density-compact");
+  applyDensity(isCompact ? "comfortable" : "compact");
+  boardCompactToggleButton.setAttribute("aria-pressed", (!isCompact).toString());
 });
 
 closeBoardMenuButton?.addEventListener("click", () => {
