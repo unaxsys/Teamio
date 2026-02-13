@@ -3,11 +3,12 @@ import fs from "fs";
 import path from "path";
 import { readFile, writeFile } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const require = createRequire(import.meta.url);
 
 const loadEnvFile = (envFilePath) => {
   try {
@@ -39,6 +40,14 @@ loadEnvFile(path.join(__dirname, ".env"));
 
 const DB_PATH = path.join(__dirname, "db.json");
 const SQLITE_USERS_PATH = path.join(__dirname, "users.sqlite");
+const DatabaseSync = (() => {
+  try {
+    return require("node:sqlite").DatabaseSync;
+  } catch {
+    return null;
+  }
+})();
+const SQLITE_USERS_ENABLED = Boolean(DatabaseSync);
 const PORT = Number(process.env.PORT ?? 8787);
 const HOST = process.env.HOST || "0.0.0.0";
 const BASE_URL = (process.env.BASE_URL || "").trim();
@@ -216,37 +225,44 @@ const sendEmail = async (payload) => {
   throw lastError || new Error("Неуспешно изпращане на имейл. Няма активен доставчик.");
 };
 
-const usersSqlite = new DatabaseSync(SQLITE_USERS_PATH);
-usersSqlite.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    email TEXT NOT NULL UNIQUE,
-    password TEXT NOT NULL,
-    accountId TEXT,
-    role TEXT,
-    teamIds TEXT,
-    isEmailVerified INTEGER NOT NULL DEFAULT 0,
-    createdAt INTEGER
-  );
-`);
+let usersSqlite = null;
+let upsertUserStmt = null;
+let deleteUserStmt = null;
+let selectAllUsersStmt = null;
 
-const upsertUserStmt = usersSqlite.prepare(`
-  INSERT INTO users (id, name, email, password, accountId, role, teamIds, isEmailVerified, createdAt)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  ON CONFLICT(id) DO UPDATE SET
-    name=excluded.name,
-    email=excluded.email,
-    password=excluded.password,
-    accountId=excluded.accountId,
-    role=excluded.role,
-    teamIds=excluded.teamIds,
-    isEmailVerified=excluded.isEmailVerified,
-    createdAt=excluded.createdAt;
-`);
+if (SQLITE_USERS_ENABLED) {
+  usersSqlite = new DatabaseSync(SQLITE_USERS_PATH);
+  usersSqlite.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      password TEXT NOT NULL,
+      accountId TEXT,
+      role TEXT,
+      teamIds TEXT,
+      isEmailVerified INTEGER NOT NULL DEFAULT 0,
+      createdAt INTEGER
+    );
+  `);
 
-const deleteUserStmt = usersSqlite.prepare(`DELETE FROM users WHERE id = ?`);
-const selectAllUsersStmt = usersSqlite.prepare(`SELECT * FROM users`);
+  upsertUserStmt = usersSqlite.prepare(`
+    INSERT INTO users (id, name, email, password, accountId, role, teamIds, isEmailVerified, createdAt)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      name=excluded.name,
+      email=excluded.email,
+      password=excluded.password,
+      accountId=excluded.accountId,
+      role=excluded.role,
+      teamIds=excluded.teamIds,
+      isEmailVerified=excluded.isEmailVerified,
+      createdAt=excluded.createdAt;
+  `);
+
+  deleteUserStmt = usersSqlite.prepare(`DELETE FROM users WHERE id = ?`);
+  selectAllUsersStmt = usersSqlite.prepare(`SELECT * FROM users`);
+}
 
 const normalizeSqliteUser = (user) => ({
   id: user.id,
@@ -280,6 +296,10 @@ const hydrateSqliteUser = (row) => ({
 });
 
 const writeUsersToSqlite = (users = []) => {
+  if (!SQLITE_USERS_ENABLED) {
+    return;
+  }
+
   const normalizedUsers = users.map(normalizeSqliteUser);
   const incomingIds = new Set(normalizedUsers.map((user) => user.id));
   const existingRows = selectAllUsersStmt.all();
@@ -312,12 +332,21 @@ const writeUsersToSqlite = (users = []) => {
   }
 };
 
-const readUsersFromSqlite = () => selectAllUsersStmt.all().map(hydrateSqliteUser);
+const readUsersFromSqlite = (fallbackUsers = []) => {
+  if (!SQLITE_USERS_ENABLED) {
+    return fallbackUsers.map(normalizeSqliteUser);
+  }
+  return selectAllUsersStmt.all().map(hydrateSqliteUser);
+};
 
 const readDb = async () => {
   try {
     const db = ensureDbShape(JSON.parse(await readFile(DB_PATH, "utf8")));
-    db.users = readUsersFromSqlite();
+    try {
+      db.users = readUsersFromSqlite(db.users);
+    } catch (error) {
+      console.error("[Teamio] Грешка при четене на users от SQLite. Ползва се db.json fallback:", error);
+    }
     return db;
   } catch (error) {
     if (error?.code === "ENOENT") {
@@ -334,9 +363,19 @@ const readDb = async () => {
 };
 const writeDb = async (db) => {
   const nextDb = ensureDbShape(db);
-  writeUsersToSqlite(nextDb.users ?? []);
-  const dbWithoutUsers = { ...nextDb, users: [] };
-  await writeFile(DB_PATH, JSON.stringify(dbWithoutUsers, null, 2));
+  if (!SQLITE_USERS_ENABLED) {
+    await writeFile(DB_PATH, JSON.stringify(nextDb, null, 2));
+    return;
+  }
+
+  try {
+    writeUsersToSqlite(nextDb.users ?? []);
+    const dbWithoutUsers = { ...nextDb, users: [] };
+    await writeFile(DB_PATH, JSON.stringify(dbWithoutUsers, null, 2));
+  } catch (error) {
+    console.error("[Teamio] Грешка при запис на users в SQLite. Ползва се db.json fallback:", error);
+    await writeFile(DB_PATH, JSON.stringify(nextDb, null, 2));
+  }
 };
 
 const ensureDbShape = (db) => {
@@ -376,6 +415,10 @@ const ensureDbShape = (db) => {
 };
 
 const bootstrapUsersToSqlite = async () => {
+  if (!SQLITE_USERS_ENABLED) {
+    return;
+  }
+
   try {
     const db = ensureDbShape(JSON.parse(await readFile(DB_PATH, "utf8")));
     const sqliteUsers = readUsersFromSqlite();
@@ -1704,4 +1747,7 @@ server.listen(PORT, HOST, () => {
   console.log(
     `[Teamio] Имейл статус: ${emailStatus.configured ? `конфигуриран (preferred=${emailStatus.preferredProvider}, налични=${(emailStatus.availableProviders ?? []).join(",")})` : `грешка (${emailStatus.reason})`}`
   );
+  if (!SQLITE_USERS_ENABLED) {
+    console.warn("[Teamio] node:sqlite не е наличен в текущата Node среда. Users ще се пазят в db.json (server-side fallback).");
+  }
 });
