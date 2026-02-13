@@ -141,6 +141,17 @@ const SYNC_STORAGE_KEYS = [
 
 const defaultBoards = [{ id: "board-default", name: "Основен борд", createdAt: Date.now(), visibility: "workspace", createdBy: null, workspaceId: null, members: [], settings: { allowComments: true, allowAttachments: true, labelsEnabled: true } }];
 
+const ensureDefaultBoard = (boards) => {
+  const safeBoards = Array.isArray(boards) ? boards : [];
+  if (safeBoards.some((board) => board?.id === "board-default")) {
+    return safeBoards;
+  }
+  return [
+    normalizeBoard({ ...defaultBoards[0], workspaceId: null }),
+    ...safeBoards,
+  ];
+};
+
 const defaultColumns = [
   { id: "backlog", title: "Backlog", color: "#5b6bff" },
   { id: "progress", title: "В процес", color: "#2bb8a1" },
@@ -338,7 +349,7 @@ const loadBoards = () => {
     persistAndSync("teamio-current-board", seeded[0].id);
     return seeded;
   }
-  const normalized = boards.map((board) => normalizeBoard(board));
+  const normalized = ensureDefaultBoard(boards.map((board) => normalizeBoard(board)));
   persistAndSync("teamio-boards", JSON.stringify(normalized));
   if (!workspace?.id) {
     return normalized;
@@ -350,7 +361,7 @@ const loadBoards = () => {
 const saveBoards = (boards) => {
   const workspace = getCurrentWorkspace();
   const existing = JSON.parse(localStorage.getItem("teamio-boards") ?? "[]");
-  const safeBoards = boards.map((board) => normalizeBoard(board));
+  const safeBoards = ensureDefaultBoard(boards.map((board) => normalizeBoard(board)));
   if (!workspace?.id || !Array.isArray(existing)) {
     persistAndSync("teamio-boards", JSON.stringify(safeBoards));
     return;
@@ -2228,6 +2239,7 @@ const renderTeams = () => {
 
   syncTeamSelectors();
   renderInvites();
+  void pushWorkspaceState();
 };
 
 
@@ -3046,6 +3058,7 @@ boardSelector?.addEventListener("change", () => {
   renderBoardSelector();
   renderBoard(getVisibleTasks());
   renderInvites();
+  void pushWorkspaceState();
 });
 
 boardSearchInput?.addEventListener("input", () => {
@@ -3132,6 +3145,7 @@ createBoardButton?.addEventListener("click", () => {
   renderBoardSelector();
   renderBoard(getVisibleTasks());
   renderInvites();
+  void pushWorkspaceState();
 });
 
 const renameCurrentBoard = () => {
@@ -3150,6 +3164,7 @@ const renameCurrentBoard = () => {
   }
   saveBoards(boards.map((board) => (board.id === currentBoardId ? { ...board, name: nextName.trim() } : board)));
   renderBoardSelector();
+  void pushWorkspaceState();
 };
 
 const deleteCurrentBoard = () => {
@@ -3166,6 +3181,10 @@ const deleteCurrentBoard = () => {
   if (!currentBoard) {
     return;
   }
+  if (currentBoard.id === "board-default") {
+    setAuthMessage("Основният борд не може да бъде изтрит.");
+    return;
+  }
   const confirmed = window.confirm(`Изтриване на борд „${currentBoard.name}“?`);
   if (!confirmed) {
     return;
@@ -3180,6 +3199,7 @@ const deleteCurrentBoard = () => {
   renderBoardSelector();
   renderBoard(getVisibleTasks());
   renderInvites();
+  void pushWorkspaceState();
 };
 
 renameBoardButton?.addEventListener("click", renameCurrentBoard);
