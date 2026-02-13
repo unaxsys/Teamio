@@ -2,6 +2,7 @@ if (!window.__teamioAppInitialized) {
   window.__teamioAppInitialized = true;
 
 const boardEl = document.getElementById("board");
+const boardCanvasEl = document.querySelector(".board-canvas");
 const appEl = document.getElementById("app");
 const authScreenEl = document.getElementById("auth-screen");
 const loginForm = document.getElementById("login-form");
@@ -3250,6 +3251,14 @@ boardSearchInput?.addEventListener("input", () => {
   boardSearchQuery = boardSearchInput.value;
   renderBoard(getVisibleTasks());
 });
+
+boardCanvasEl?.addEventListener("wheel", (event) => {
+  if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) {
+    return;
+  }
+  boardCanvasEl.scrollLeft += event.deltaY;
+  event.preventDefault();
+}, { passive: false });
 
 boardFilterButton?.addEventListener("click", () => {
   activateTab("settings");

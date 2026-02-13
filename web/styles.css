@@ -550,6 +550,7 @@ body {
   overflow-y: hidden;
   padding: 0 0 16px;
   width: 100%;
+  scrollbar-gutter: stable;
 }
 
 .board {
@@ -1402,15 +1403,11 @@ body {
   position: sticky;
   top: 0;
   z-index: 30;
-  max-width: 1420px;
-  margin-left: auto;
-  margin-right: auto;
+  width: 100%;
 }
 
 .board-stage {
   width: 100%;
-  max-width: 1420px;
-  margin: 0 auto;
 }
 
 .header {
