@@ -1792,8 +1792,25 @@ const renderBoard = (tasks) => {
       openModal(listLimitModal);
     });
 
+    const pinButton = document.createElement("button");
+    pinButton.type = "button";
+    pinButton.className = "column__pin";
+    const isPinned = pinnedColumnIds.includes(column.id);
+    pinButton.textContent = isPinned ? "Откачи" : "Закачи";
+    pinButton.title = "Закачи колоната вляво";
+    pinButton.addEventListener("click", () => {
+      const alreadyPinned = pinnedColumnIds.includes(column.id);
+      if (alreadyPinned) {
+        pinnedColumnIds = pinnedColumnIds.filter((id) => id !== column.id);
+      } else {
+        pinnedColumnIds = [...pinnedColumnIds, column.id].slice(0, 2);
+      }
+      savePinnedColumnsPreference(pinnedColumnIds);
+      renderBoard(getVisibleTasks());
+    });
+
     const canManageLists = canManageBoardStructure();
-    [dragButton, renameButton, limitButton].forEach((btn) => {
+    [dragButton, renameButton, limitButton, pinButton].forEach((btn) => {
       btn.disabled = !canManageLists;
       btn.style.display = canManageLists ? "inline-flex" : "none";
     });
