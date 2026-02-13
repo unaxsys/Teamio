@@ -292,6 +292,14 @@ const getCurrentWorkspace = () => {
   if (!account) {
     return null;
   }
+  const currentUser = loadCurrentUser();
+  const preferredWorkspaceId = normalizeText(currentUser?.workspaceId ?? "");
+  if (preferredWorkspaceId) {
+    const preferredWorkspace = (account.workspaces ?? []).find((workspace) => workspace.id === preferredWorkspaceId);
+    if (preferredWorkspace) {
+      return preferredWorkspace;
+    }
+  }
   return account.workspaces?.[0] ?? null;
 };
 
@@ -462,6 +470,31 @@ const loadAccounts = () => {
 
 const saveAccounts = (accounts) => {
   persistAndSync("teamio-accounts", JSON.stringify(accounts));
+};
+
+const upsertAccountFromServer = (accountPayload) => {
+  if (!accountPayload?.id) {
+    return;
+  }
+  const accounts = loadAccounts();
+  const normalized = normalizeAccount(accountPayload, accountPayload.ownerUserId ?? null);
+  const nextAccounts = [...accounts.filter((entry) => entry.id !== normalized.id), normalized];
+  saveAccounts(nextAccounts);
+};
+
+const syncCurrentAccountFromApi = async (user) => {
+  if (!user?.accountId || !user?.id) {
+    return;
+  }
+
+  const params = new URLSearchParams({
+    accountId: user.accountId,
+    requesterUserId: user.id,
+  });
+  const apiResult = await apiRequest(`/api/accounts/context?${params.toString()}`);
+  if (apiResult?.ok && apiResult.data?.account) {
+    upsertAccountFromServer(apiResult.data.account);
+  }
 };
 
 const getCurrentAccount = () => {
@@ -829,16 +862,32 @@ const scheduleWorkspaceSync = () => {
   }, 350);
 };
 
-const pullWorkspaceState = async () => {
+let lastWorkspaceStateUpdatedAt = 0;
+let workspacePollTimer = null;
+
+const pullWorkspaceState = async ({ force = false } = {}) => {
   const context = getSyncContext();
   if (!context) {
-    return;
+    return false;
   }
   const params = new URLSearchParams(context);
   const apiResult = await apiRequest(`/api/workspace-state?${params.toString()}`);
-  if (apiResult?.ok && apiResult.data?.state && typeof apiResult.data.state === "object") {
-    applyWorkspaceSnapshot(apiResult.data.state);
+  if (!apiResult?.ok || !apiResult.data?.state || typeof apiResult.data.state !== "object") {
+    return false;
   }
+
+  const remoteUpdatedAt = Number(apiResult.data.updatedAt ?? 0);
+  if (!force && remoteUpdatedAt > 0 && remoteUpdatedAt <= lastWorkspaceStateUpdatedAt) {
+    return false;
+  }
+
+  const beforeSnapshot = JSON.stringify(buildWorkspaceSnapshot());
+  applyWorkspaceSnapshot(apiResult.data.state);
+  const afterSnapshot = JSON.stringify(buildWorkspaceSnapshot());
+  if (remoteUpdatedAt > 0) {
+    lastWorkspaceStateUpdatedAt = remoteUpdatedAt;
+  }
+  return beforeSnapshot !== afterSnapshot;
 };
 
 const persistAndSync = (key, value) => {
@@ -965,6 +1014,29 @@ const startInvitesPolling = () => {
   // no-op: refresh става само при mount/login и при връщане към таба
 };
 
+const startWorkspacePolling = () => {
+  stopWorkspacePolling();
+  workspacePollTimer = setInterval(async () => {
+    const changed = await pullWorkspaceState({ force: true });
+    if (!changed) {
+      return;
+    }
+    syncTeamSelectors();
+    renderBoardSelector();
+    renderBoard(getVisibleTasks());
+    renderCalendar();
+    updateReports();
+  }, 4000);
+};
+
+const stopWorkspacePolling = () => {
+  if (workspacePollTimer) {
+    clearInterval(workspacePollTimer);
+    workspacePollTimer = null;
+  }
+};
+
+
 const hashPassword = async (password) => {
   const subtleCrypto = globalThis.crypto?.subtle;
   if (!subtleCrypto) {
@@ -1082,9 +1154,10 @@ const updateProfile = (user) => {
 };
 
 const showApp = async (user) => {
+  await syncCurrentAccountFromApi(user);
   const normalizedUser = ensureAccountForUser(user);
   normalizeInviteFormFields();
-  await pullWorkspaceState();
+  await pullWorkspaceState({ force: true });
   authScreenEl.style.display = "none";
   appEl.classList.remove("app--hidden");
   updateProfile(normalizedUser);
@@ -1102,10 +1175,12 @@ const showApp = async (user) => {
   await syncCompanyProfileForm();
   updateReports();
   startInvitesPolling();
+  startWorkspacePolling();
 };
 
 const showAuth = () => {
   stopInvitesPolling();
+  stopWorkspacePolling();
   authScreenEl.style.display = "flex";
   appEl.classList.add("app--hidden");
 };
@@ -1119,6 +1194,9 @@ const handleLogin = async (email, password) => {
   });
 
   if (apiResult?.ok && apiResult.data?.user) {
+    if (apiResult.data.account) {
+      upsertAccountFromServer(apiResult.data.account);
+    }
     setCurrentUser(apiResult.data.user);
     setAuthMessage("");
     setVerificationHelp();
@@ -3354,23 +3432,24 @@ settingsAccordion?.querySelectorAll(".setting-item__toggle").forEach((button) =>
   });
 });
 
-const initialTasks = getVisibleTasks();
-applyRoleBasedTabVisibility();
-renderBoardSelector();
+const activeUser = loadCurrentUser();
+
 loadTheme();
 loadDensity();
-renderBoard(initialTasks);
-renderTeams();
-renderInvites();
-renderMyInvites();
-renderMembersInvitesSummary();
-renderCalendar();
-updateReports();
 
-const activeUser = loadCurrentUser();
 if (activeUser) {
   showApp(activeUser);
 } else {
+  const initialTasks = getVisibleTasks();
+  applyRoleBasedTabVisibility();
+  renderBoardSelector();
+  renderBoard(initialTasks);
+  renderTeams();
+  renderInvites();
+  renderMyInvites();
+  renderMembersInvitesSummary();
+  renderCalendar();
+  updateReports();
   showAuth();
 }
 

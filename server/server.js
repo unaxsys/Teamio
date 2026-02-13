@@ -806,15 +806,24 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    const account = db.accounts.find((item) => item.id === user.accountId);
+    const workspaces = account?.workspaces ?? [];
+    const membershipWorkspace = workspaces.find((workspace) =>
+      (workspace.memberRoles ?? []).some((member) => member.userId === user.id)
+    );
+    const workspaceId = membershipWorkspace?.id ?? workspaces[0]?.id ?? null;
+
     send(res, 200, {
       user: {
         id: user.id,
         name: user.name,
         email: user.email,
         accountId: user.accountId,
+        workspaceId,
         role: user.role,
         teamIds: user.teamIds ?? [],
       },
+      account: account ?? null,
     });
     return;
   }
@@ -871,6 +880,31 @@ const server = createServer(async (req, res) => {
     await writeDb(db);
 
     send(res, 200, { message: "Паролата е обновена." });
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/accounts/context" && req.method === "GET") {
+    const accountId = normalizeText(requestUrl.searchParams.get("accountId") ?? "");
+    const requesterUserId = normalizeText(requestUrl.searchParams.get("requesterUserId") ?? "");
+
+    if (!accountId || !requesterUserId) {
+      send(res, 400, { message: "Липсват accountId/requesterUserId." });
+      return;
+    }
+
+    const db = ensureDbShape(await readDb());
+    const account = db.accounts.find((item) => item.id === accountId);
+    if (!account) {
+      send(res, 404, { message: "Фирмата не е намерена." });
+      return;
+    }
+
+    if (!isAccountMember(db, account, requesterUserId)) {
+      send(res, 403, { message: "Forbidden" });
+      return;
+    }
+
+    send(res, 200, { account });
     return;
   }
 
