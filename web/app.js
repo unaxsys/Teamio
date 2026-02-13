@@ -450,12 +450,6 @@ const saveColumns = (columns) => {
   saveAllColumns([...allColumns, ...columns.map((column) => normalizeColumn(column, currentBoardId))]);
 };
 
-const loadUsers = () => JSON.parse(localStorage.getItem("teamio-users") ?? "[]");
-
-const saveUsers = (users) => {
-  persistAndSync("teamio-users", JSON.stringify(users));
-};
-
 const loadAccounts = () => {
   const parsed = JSON.parse(localStorage.getItem("teamio-accounts") ?? "[]");
   if (!Array.isArray(parsed)) {
@@ -484,10 +478,8 @@ const ensureAccountForUser = (user) => {
   }
 
   const accounts = loadAccounts();
-  const users = loadUsers();
-  const localUser = users.find((item) => item.id === user.id) ?? null;
-  const preferredAccountId = user.accountId || localUser?.accountId || null;
-  const existingUser = { ...(localUser ?? user), accountId: preferredAccountId };
+  const preferredAccountId = user.accountId || null;
+  const existingUser = { ...user, accountId: preferredAccountId };
   const existingAccount = preferredAccountId ? accounts.find((account) => account.id === preferredAccountId) : null;
 
   if (existingAccount) {
@@ -515,11 +507,6 @@ const ensureAccountForUser = (user) => {
   }, existingUser.id);
 
   saveAccounts([...accounts, nextAccount]);
-
-  const updatedUsers = users.map((item) => (item.id === existingUser.id ? { ...item, accountId } : item));
-  if (updatedUsers.length > 0) {
-    saveUsers(updatedUsers);
-  }
 
   const nextUser = { ...user, accountId };
   setCurrentUser(nextUser);
@@ -687,24 +674,29 @@ const loadApiBase = () => {
   const currentOrigin = window.location.origin;
   const { protocol, hostname } = window.location;
 
-  const buildApiOriginFromCurrentHost = (port = "8787") => {
+  const buildApiOriginFromCurrentHost = (port = "") => {
     const normalizedPort = normalizeText(port);
     return `${protocol}//${hostname}${normalizedPort ? `:${normalizedPort}` : ""}`;
   };
 
   if (!storedBase) {
-    return buildApiOriginFromCurrentHost();
+    if (["localhost", "127.0.0.1"].includes(hostname)) {
+      return buildApiOriginFromCurrentHost("8787");
+    }
+    return currentOrigin;
   }
 
   try {
     const parsed = new URL(storedBase, currentOrigin);
     if (window.location.hostname !== "localhost" && ["localhost", "127.0.0.1"].includes(parsed.hostname)) {
-      const parsedPort = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
-      return buildApiOriginFromCurrentHost(parsedPort);
+      return currentOrigin;
     }
     return parsed.origin;
   } catch {
-    return buildApiOriginFromCurrentHost();
+    if (["localhost", "127.0.0.1"].includes(hostname)) {
+      return buildApiOriginFromCurrentHost("8787");
+    }
+    return currentOrigin;
   }
 };
 
@@ -721,7 +713,11 @@ const apiRequest = async (path, options = {}) => {
     }
     return { ok: true, data };
   } catch (error) {
-    return { ok: false, data: { message: "Сървърът не е достъпен." } };
+    const isGithubPages = window.location.hostname.endsWith("github.io");
+    const hint = isGithubPages
+      ? ` Нужен е външен API сървър. Задай го така: localStorage.setItem("teamio-api-base", "https://your-api-domain.com") и презареди.`
+      : "";
+    return { ok: false, data: { message: `Сървърът не е достъпен (${base}).${hint}` } };
   }
 };
 
@@ -1709,7 +1705,7 @@ const renderMembersInvitesSummary = async () => {
     pending.forEach((invite) => {
       const item = document.createElement("div");
       item.className = "panel-list__item panel-list__item--stack";
-      const invitedBy = loadUsers().find((entry) => entry.id === invite.invitedByUserId)?.name ?? "Неизвестен";
+      const invitedBy = invite.invitedByName || "Неизвестен";
       item.innerHTML = `<div><strong>${invite.email}</strong><div class="panel-list__meta">Поканил: ${invitedBy} · ${new Date(invite.createdAt).toLocaleDateString("bg-BG")}</div></div>`;
 
       const revokeButton = document.createElement("button");
@@ -1837,14 +1833,10 @@ const renderMyInvites = () => {
   }
 
   const accounts = loadAccounts();
-  const users = loadUsers();
-
   invites.forEach((invite) => {
     const accountName = invite.accountName || accounts.find((account) => account.id === invite.accountId)?.name || "Неизвестна фирма";
     const invitedByName =
       invite.invitedByName ||
-      users.find((entry) => entry.id === invite.invitedByUserId)?.name ||
-      users.find((entry) => entry.id === invite.invitedByUserId)?.email ||
       "Неизвестен";
     const item = document.createElement("div");
     item.className = "panel-list__item panel-list__item--stack";
@@ -1879,16 +1871,6 @@ const renderMyInvites = () => {
           );
           saveInvites(updatedInvites);
         }
-
-        const users = loadUsers();
-        const updatedUsers = users.map((user) => {
-          if (normalizeEmail(user.email) !== normalizeEmail(currentUser.email)) {
-            return user;
-          }
-          const teamIds = Array.isArray(user.teamIds) ? user.teamIds : [];
-          return { ...user, accountId: invite.accountId, role: invite.role, teamIds };
-        });
-        saveUsers(updatedUsers);
 
         const nextCurrentUser = { ...currentUser, accountId: invite.accountId, role: invite.role, teamIds: currentUser.teamIds ?? [] };
         setCurrentUser(nextCurrentUser);
@@ -1962,18 +1944,8 @@ const openGroupMembers = (groupId) => {
 const renderTeams = () => {
   const canManage = hasManagementAccess();
   const account = getCurrentAccount();
-  const registeredUsers = loadUsers()
-    .filter((user) => user.accountId === account?.id)
-    .map((user) => ({
-      id: user.id,
-      name: user.name,
-      role: user.role ?? "Member",
-      teamIds: user.teamIds ?? [],
-      userId: user.id,
-      isOwner: account?.ownerUserId === user.id,
-    }));
   const manualMembers = (account?.members ?? []).map((member) => ({ ...member, userId: member.userId ?? null, isOwner: false }));
-  const members = [...registeredUsers];
+  const members = [];
   manualMembers.forEach((member) => {
     if (!members.some((entry) => (entry.userId ?? entry.id) === (member.userId ?? member.id))) {
       members.push(member);
@@ -2029,13 +2001,6 @@ const renderTeams = () => {
       }
 
       const memberUserId = member.userId ?? member.id;
-      const updatedUsers = loadUsers().map((user) =>
-        user.id === memberUserId && user.accountId === account.id
-          ? { ...user, accountId: null, teamIds: [] }
-          : user
-      );
-      saveUsers(updatedUsers);
-
       const accounts = loadAccounts().map((entry) =>
         entry.id === account.id
           ? {
@@ -2048,7 +2013,7 @@ const renderTeams = () => {
       );
       saveAccounts(accounts);
 
-      const memberEmail = loadUsers().find((user) => user.id === memberUserId)?.email;
+      const memberEmail = member.email;
       if (memberEmail) {
         saveInvites(
           loadInvites().map((invite) =>
@@ -2132,18 +2097,6 @@ const renderTeams = () => {
           return { ...entry, members: updatedMembers };
         });
 
-        const updatedUsersByTeam = loadUsers().map((user) => {
-          if (user.id !== memberId || user.accountId !== account.id) {
-            return user;
-          }
-          const existingTeamIds = user.teamIds ?? [];
-          if (existingTeamIds.includes(team.id)) {
-            return user;
-          }
-          return { ...user, teamIds: [...existingTeamIds, team.id] };
-        });
-
-        saveUsers(updatedUsersByTeam);
         saveAccounts(updatedAccounts);
         renderTeams();
         updateReports();

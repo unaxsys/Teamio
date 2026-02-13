@@ -140,6 +140,14 @@ A GitHub Actions workflow is included at `.github/workflows/deploy-web.yml` and 
 After deploy, open exactly this URL:
 `https://unaxsys.github.io/Teamio/`
 
+> Ако при регистрация/вход видиш „Сървърът не е достъпен", това означава, че GitHub Pages няма вързан API по подразбиране.
+> Задай публичния адрес на API сървъра в браузър конзолата:
+>
+> ```js
+> localStorage.setItem("teamio-api-base", "https://your-api-domain.com")
+> location.reload()
+> ```
+
 ### If you get 404
 - Make sure you are opening exactly `https://unaxsys.github.io/Teamio/` (no extra characters after `/`).
 - In **Actions**, confirm the latest run of **Deploy web to GitHub Pages** is green.
