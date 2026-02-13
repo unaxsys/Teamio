@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import { readFile, writeFile } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -37,6 +38,7 @@ const loadEnvFile = (envFilePath) => {
 loadEnvFile(path.join(__dirname, ".env"));
 
 const DB_PATH = path.join(__dirname, "db.json");
+const SQLITE_USERS_PATH = path.join(__dirname, "users.sqlite");
 const PORT = Number(process.env.PORT ?? 8787);
 const HOST = process.env.HOST || "0.0.0.0";
 const BASE_URL = (process.env.BASE_URL || "").trim();
@@ -214,19 +216,128 @@ const sendEmail = async (payload) => {
   throw lastError || new Error("Неуспешно изпращане на имейл. Няма активен доставчик.");
 };
 
+const usersSqlite = new DatabaseSync(SQLITE_USERS_PATH);
+usersSqlite.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL UNIQUE,
+    password TEXT NOT NULL,
+    accountId TEXT,
+    role TEXT,
+    teamIds TEXT,
+    isEmailVerified INTEGER NOT NULL DEFAULT 0,
+    createdAt INTEGER
+  );
+`);
+
+const upsertUserStmt = usersSqlite.prepare(`
+  INSERT INTO users (id, name, email, password, accountId, role, teamIds, isEmailVerified, createdAt)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET
+    name=excluded.name,
+    email=excluded.email,
+    password=excluded.password,
+    accountId=excluded.accountId,
+    role=excluded.role,
+    teamIds=excluded.teamIds,
+    isEmailVerified=excluded.isEmailVerified,
+    createdAt=excluded.createdAt;
+`);
+
+const deleteUserStmt = usersSqlite.prepare(`DELETE FROM users WHERE id = ?`);
+const selectAllUsersStmt = usersSqlite.prepare(`SELECT * FROM users`);
+
+const normalizeSqliteUser = (user) => ({
+  id: user.id,
+  name: user.name,
+  email: normalizeEmail(user.email),
+  password: user.password,
+  accountId: normalizeOptionalId(user.accountId),
+  role: normalizeText(user.role) || "Member",
+  teamIds: Array.isArray(user.teamIds) ? user.teamIds : [],
+  isEmailVerified: Boolean(user.isEmailVerified),
+  createdAt: Number.isFinite(Number(user.createdAt)) ? Number(user.createdAt) : Date.now(),
+});
+
+const hydrateSqliteUser = (row) => ({
+  id: row.id,
+  name: row.name,
+  email: normalizeEmail(row.email),
+  password: row.password,
+  accountId: normalizeOptionalId(row.accountId),
+  role: normalizeText(row.role) || "Member",
+  teamIds: (() => {
+    try {
+      const parsed = JSON.parse(row.teamIds || "[]");
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  })(),
+  isEmailVerified: Boolean(row.isEmailVerified),
+  createdAt: Number.isFinite(Number(row.createdAt)) ? Number(row.createdAt) : Date.now(),
+});
+
+const writeUsersToSqlite = (users = []) => {
+  const normalizedUsers = users.map(normalizeSqliteUser);
+  const incomingIds = new Set(normalizedUsers.map((user) => user.id));
+  const existingRows = selectAllUsersStmt.all();
+
+  usersSqlite.exec("BEGIN TRANSACTION");
+  try {
+    for (const user of normalizedUsers) {
+      upsertUserStmt.run(
+        user.id,
+        user.name,
+        user.email,
+        user.password,
+        user.accountId,
+        user.role,
+        JSON.stringify(user.teamIds ?? []),
+        user.isEmailVerified ? 1 : 0,
+        user.createdAt
+      );
+    }
+
+    for (const row of existingRows) {
+      if (!incomingIds.has(row.id)) {
+        deleteUserStmt.run(row.id);
+      }
+    }
+    usersSqlite.exec("COMMIT");
+  } catch (error) {
+    usersSqlite.exec("ROLLBACK");
+    throw error;
+  }
+};
+
+const readUsersFromSqlite = () => selectAllUsersStmt.all().map(hydrateSqliteUser);
+
 const readDb = async () => {
   try {
-    return JSON.parse(await readFile(DB_PATH, "utf8"));
+    const db = ensureDbShape(JSON.parse(await readFile(DB_PATH, "utf8")));
+    db.users = readUsersFromSqlite();
+    return db;
   } catch (error) {
     if (error?.code === "ENOENT") {
       const fallbackDb = ensureDbShape({});
+      if (fallbackDb.users.length > 0) {
+        writeUsersToSqlite(fallbackDb.users);
+      }
+      fallbackDb.users = readUsersFromSqlite();
       await writeDb(fallbackDb);
       return fallbackDb;
     }
     throw error;
   }
 };
-const writeDb = async (db) => writeFile(DB_PATH, JSON.stringify(db, null, 2));
+const writeDb = async (db) => {
+  const nextDb = ensureDbShape(db);
+  writeUsersToSqlite(nextDb.users ?? []);
+  const dbWithoutUsers = { ...nextDb, users: [] };
+  await writeFile(DB_PATH, JSON.stringify(dbWithoutUsers, null, 2));
+};
 
 const ensureDbShape = (db) => {
   db.users ??= [];
@@ -262,6 +373,20 @@ const ensureDbShape = (db) => {
   });
 
   return db;
+};
+
+const bootstrapUsersToSqlite = async () => {
+  try {
+    const db = ensureDbShape(JSON.parse(await readFile(DB_PATH, "utf8")));
+    const sqliteUsers = readUsersFromSqlite();
+    if (sqliteUsers.length === 0 && db.users.length > 0) {
+      writeUsersToSqlite(db.users);
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      console.error("[Teamio] Грешка при миграция на users към SQLite:", error);
+    }
+  }
 };
 
 const send = (res, statusCode, payload) => {
@@ -1566,6 +1691,8 @@ const server = createServer(async (req, res) => {
 
   send(res, 404, { message: "Not found" });
 });
+
+await bootstrapUsersToSqlite();
 
 server.listen(PORT, HOST, () => {
   const emailStatus = getEmailStatus();
