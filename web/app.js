@@ -141,6 +141,26 @@ const SYNC_STORAGE_KEYS = [
 
 const defaultBoards = [{ id: "board-default", name: "Основен борд", createdAt: Date.now(), visibility: "workspace", createdBy: null, workspaceId: null, members: [], settings: { allowComments: true, allowAttachments: true, labelsEnabled: true } }];
 
+const ensureDefaultBoard = (boards) => {
+  const safeBoards = Array.isArray(boards) ? boards : [];
+  const hasDefaultBoard = safeBoards.some((board) => board?.id === "board-default");
+  const normalizedBoards = safeBoards
+    .map((board) => {
+      if (board?.id !== "board-default") {
+        return board;
+      }
+      return normalizeBoard({ ...board, workspaceId: null });
+    })
+    .filter((board, index, list) => board?.id && list.findIndex((entry) => entry?.id === board.id) === index);
+  if (hasDefaultBoard) {
+    return normalizedBoards;
+  }
+  return [
+    normalizeBoard({ ...defaultBoards[0], workspaceId: null }),
+    ...normalizedBoards,
+  ];
+};
+
 const defaultColumns = [
   { id: "backlog", title: "Backlog", color: "#5b6bff" },
   { id: "progress", title: "В процес", color: "#2bb8a1" },
@@ -307,11 +327,12 @@ const normalizeBoard = (board) => {
   const currentUser = loadCurrentUser();
   const workspace = getCurrentWorkspace();
   const members = Array.isArray(board.members) ? board.members : [];
+  const workspaceId = board.workspaceId === undefined ? workspace?.id ?? null : board.workspaceId;
   return {
     ...board,
     visibility: BOARD_VISIBILITIES.includes(board.visibility) ? board.visibility : "workspace",
     createdBy: board.createdBy ?? currentUser?.id ?? null,
-    workspaceId: board.workspaceId ?? workspace?.id ?? null,
+    workspaceId,
     members,
     settings: {
       allowComments: board.settings?.allowComments ?? true,
@@ -325,19 +346,19 @@ const loadBoards = () => {
   const stored = localStorage.getItem("teamio-boards");
   const workspace = getCurrentWorkspace();
   if (!stored) {
-    const seeded = defaultBoards.map((board) => normalizeBoard({ ...board, workspaceId: workspace?.id ?? null }));
+    const seeded = defaultBoards.map((board) => normalizeBoard({ ...board, workspaceId: null }));
     persistAndSync("teamio-boards", JSON.stringify(seeded));
     persistAndSync("teamio-current-board", seeded[0].id);
     return seeded;
   }
   const boards = JSON.parse(stored);
   if (!Array.isArray(boards) || boards.length === 0) {
-    const seeded = defaultBoards.map((board) => normalizeBoard({ ...board, workspaceId: workspace?.id ?? null }));
+    const seeded = defaultBoards.map((board) => normalizeBoard({ ...board, workspaceId: null }));
     persistAndSync("teamio-boards", JSON.stringify(seeded));
     persistAndSync("teamio-current-board", seeded[0].id);
     return seeded;
   }
-  const normalized = boards.map((board) => normalizeBoard(board));
+  const normalized = ensureDefaultBoard(boards.map((board) => normalizeBoard(board)));
   persistAndSync("teamio-boards", JSON.stringify(normalized));
   if (!workspace?.id) {
     return normalized;
@@ -349,12 +370,13 @@ const loadBoards = () => {
 const saveBoards = (boards) => {
   const workspace = getCurrentWorkspace();
   const existing = JSON.parse(localStorage.getItem("teamio-boards") ?? "[]");
-  const safeBoards = boards.map((board) => normalizeBoard(board));
+  const safeBoards = ensureDefaultBoard(boards.map((board) => normalizeBoard(board)));
   if (!workspace?.id || !Array.isArray(existing)) {
     persistAndSync("teamio-boards", JSON.stringify(safeBoards));
     return;
   }
-  const preserved = existing.filter((board) => board.workspaceId && board.workspaceId !== workspace.id);
+  const safeBoardIds = new Set(safeBoards.map((board) => board.id));
+  const preserved = existing.filter((board) => board.workspaceId && board.workspaceId !== workspace.id && !safeBoardIds.has(board.id));
   persistAndSync("teamio-boards", JSON.stringify([...preserved, ...safeBoards]));
 };
 
@@ -639,6 +661,10 @@ const hasPermission = (scope, action) => {
 };
 
 const hasManagementAccess = () => hasPermission("Workspace", "members") || hasPermission("Workspace", "boards");
+const canManageDefaultBoard = () => {
+  const role = normalizeRole(loadCurrentUser()?.role ?? "Member");
+  return ["Owner", "Admin", "Manager"].includes(role);
+};
 
 const canCreateCards = () => hasPermission("Board", "cards");
 const canManageBoardStructure = () => hasPermission("Board", "lists");
@@ -681,12 +707,19 @@ const applyManagementAccessUi = () => {
     boardTeamFilter.title = hasAccess ? "" : "Само администратор/собственик може да определя филтъра.";
   }
 
-  [createBoardButton, renameBoardButton, deleteBoardButton].forEach((button) => {
+  if (createBoardButton) {
+    createBoardButton.disabled = !hasAccess;
+    createBoardButton.title = hasAccess ? "" : "Само администратор/собственик може да създава бордове.";
+  }
+
+  const currentBoardId = getCurrentBoardId();
+  const canManageCurrentBoard = hasAccess || (currentBoardId === "board-default" && canManageDefaultBoard());
+  [renameBoardButton, deleteBoardButton].forEach((button) => {
     if (!button) {
       return;
     }
-    button.disabled = !hasAccess;
-    button.title = hasAccess ? "" : "Само администратор/собственик може да управлява бордове.";
+    button.disabled = !canManageCurrentBoard;
+    button.title = canManageCurrentBoard ? "" : "Само собственик, администратор или мениджър може да управлява основния борд.";
   });
 
   if (newColumnButton) {
@@ -1017,7 +1050,7 @@ const startInvitesPolling = () => {
 const startWorkspacePolling = () => {
   stopWorkspacePolling();
   workspacePollTimer = setInterval(async () => {
-    const changed = await pullWorkspaceState({ force: true });
+    const changed = await pullWorkspaceState();
     if (!changed) {
       return;
     }
@@ -2227,6 +2260,7 @@ const renderTeams = () => {
 
   syncTeamSelectors();
   renderInvites();
+  void pushWorkspaceState();
 };
 
 
@@ -3042,9 +3076,11 @@ densityButtons.forEach((button) => {
 
 boardSelector?.addEventListener("change", () => {
   setCurrentBoardId(boardSelector.value);
+  applyManagementAccessUi();
   renderBoardSelector();
   renderBoard(getVisibleTasks());
   renderInvites();
+  void pushWorkspaceState();
 });
 
 boardSearchInput?.addEventListener("input", () => {
@@ -3109,7 +3145,7 @@ createBoardButton?.addEventListener("click", () => {
     return;
   }
   const boards = loadBoards();
-  const boardId = `board-${Date.now()}`;
+  const boardId = `board-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
   const workspace = getCurrentWorkspace();
   const currentUser = loadCurrentUser();
   boards.push(
@@ -3131,16 +3167,18 @@ createBoardButton?.addEventListener("click", () => {
   renderBoardSelector();
   renderBoard(getVisibleTasks());
   renderInvites();
+  void pushWorkspaceState();
 });
 
 const renameCurrentBoard = () => {
-  if (!hasManagementAccess()) {
-    return;
-  }
   const currentBoardId = getCurrentBoardId();
   const boards = loadBoards();
   const currentBoard = boards.find((board) => board.id === currentBoardId);
   if (!currentBoard) {
+    return;
+  }
+  const canManageCurrentBoard = currentBoard.id === "board-default" ? canManageDefaultBoard() : hasManagementAccess();
+  if (!canManageCurrentBoard) {
     return;
   }
   const nextName = window.prompt("Ново име на борда:", currentBoard.name);
@@ -3149,12 +3187,10 @@ const renameCurrentBoard = () => {
   }
   saveBoards(boards.map((board) => (board.id === currentBoardId ? { ...board, name: nextName.trim() } : board)));
   renderBoardSelector();
+  void pushWorkspaceState();
 };
 
 const deleteCurrentBoard = () => {
-  if (!hasManagementAccess()) {
-    return;
-  }
   const boards = loadBoards();
   if (boards.length <= 1) {
     setAuthMessage("Трябва да остане поне един борд.");
@@ -3163,6 +3199,10 @@ const deleteCurrentBoard = () => {
   const currentBoardId = getCurrentBoardId();
   const currentBoard = boards.find((board) => board.id === currentBoardId);
   if (!currentBoard) {
+    return;
+  }
+  const canManageCurrentBoard = currentBoard.id === "board-default" ? canManageDefaultBoard() : hasManagementAccess();
+  if (!canManageCurrentBoard) {
     return;
   }
   const confirmed = window.confirm(`Изтриване на борд „${currentBoard.name}“?`);
@@ -3179,6 +3219,7 @@ const deleteCurrentBoard = () => {
   renderBoardSelector();
   renderBoard(getVisibleTasks());
   renderInvites();
+  void pushWorkspaceState();
 };
 
 renameBoardButton?.addEventListener("click", renameCurrentBoard);
