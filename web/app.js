@@ -472,6 +472,31 @@ const saveAccounts = (accounts) => {
   persistAndSync("teamio-accounts", JSON.stringify(accounts));
 };
 
+const upsertAccountFromServer = (accountPayload) => {
+  if (!accountPayload?.id) {
+    return;
+  }
+  const accounts = loadAccounts();
+  const normalized = normalizeAccount(accountPayload, accountPayload.ownerUserId ?? null);
+  const nextAccounts = [...accounts.filter((entry) => entry.id !== normalized.id), normalized];
+  saveAccounts(nextAccounts);
+};
+
+const syncCurrentAccountFromApi = async (user) => {
+  if (!user?.accountId || !user?.id) {
+    return;
+  }
+
+  const params = new URLSearchParams({
+    accountId: user.accountId,
+    requesterUserId: user.id,
+  });
+  const apiResult = await apiRequest(`/api/accounts/context?${params.toString()}`);
+  if (apiResult?.ok && apiResult.data?.account) {
+    upsertAccountFromServer(apiResult.data.account);
+  }
+};
+
 const getCurrentAccount = () => {
   const user = loadCurrentUser();
   if (!user?.accountId) {
@@ -1129,9 +1154,10 @@ const updateProfile = (user) => {
 };
 
 const showApp = async (user) => {
+  await syncCurrentAccountFromApi(user);
   const normalizedUser = ensureAccountForUser(user);
   normalizeInviteFormFields();
-  await pullWorkspaceState();
+  await pullWorkspaceState({ force: true });
   authScreenEl.style.display = "none";
   appEl.classList.remove("app--hidden");
   updateProfile(normalizedUser);
@@ -1168,6 +1194,9 @@ const handleLogin = async (email, password) => {
   });
 
   if (apiResult?.ok && apiResult.data?.user) {
+    if (apiResult.data.account) {
+      upsertAccountFromServer(apiResult.data.account);
+    }
     setCurrentUser(apiResult.data.user);
     setAuthMessage("");
     setVerificationHelp();
