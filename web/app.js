@@ -144,12 +144,19 @@ const defaultBoards = [{ id: "board-default", name: "Основен борд", c
 
 const ensureDefaultBoard = (boards) => {
   const safeBoards = Array.isArray(boards) ? boards : [];
-  if (safeBoards.some((board) => board?.id === "board-default")) {
-    return safeBoards;
+  const hasDefaultBoard = safeBoards.some((board) => board?.id === "board-default");
+  const normalizedBoards = safeBoards.map((board) => {
+    if (board?.id !== "board-default") {
+      return board;
+    }
+    return normalizeBoard({ ...board, workspaceId: null });
+  });
+  if (hasDefaultBoard) {
+    return normalizedBoards;
   }
   return [
     normalizeBoard({ ...defaultBoards[0], workspaceId: null }),
-    ...safeBoards,
+    ...normalizedBoards,
   ];
 };
 
@@ -338,14 +345,14 @@ const loadBoards = () => {
   const stored = localStorage.getItem("teamio-boards");
   const workspace = getCurrentWorkspace();
   if (!stored) {
-    const seeded = defaultBoards.map((board) => normalizeBoard({ ...board, workspaceId: workspace?.id ?? null }));
+    const seeded = defaultBoards.map((board) => normalizeBoard({ ...board, workspaceId: null }));
     persistAndSync("teamio-boards", JSON.stringify(seeded));
     persistAndSync("teamio-current-board", seeded[0].id);
     return seeded;
   }
   const boards = JSON.parse(stored);
   if (!Array.isArray(boards) || boards.length === 0) {
-    const seeded = defaultBoards.map((board) => normalizeBoard({ ...board, workspaceId: workspace?.id ?? null }));
+    const seeded = defaultBoards.map((board) => normalizeBoard({ ...board, workspaceId: null }));
     persistAndSync("teamio-boards", JSON.stringify(seeded));
     persistAndSync("teamio-current-board", seeded[0].id);
     return seeded;
