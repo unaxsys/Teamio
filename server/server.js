@@ -42,11 +42,15 @@ const DATABASE_URL = (process.env.DATABASE_URL || "").trim();
 const JWT_SECRET = (process.env.JWT_SECRET || "teamio-dev-secret").trim();
 const WEB_DIR = path.join(__dirname, "../web");
 
-if (!DATABASE_URL) {
-  throw new Error("Липсва DATABASE_URL. PostgreSQL е задължителен за тази версия.");
-}
+const pool = DATABASE_URL ? new Pool({ connectionString: DATABASE_URL }) : null;
+let dbReady = Boolean(pool);
 
-const pool = new Pool({ connectionString: DATABASE_URL });
+const dbUnavailableMessage = "Базата не е конфигурирана или е недостъпна. Провери DATABASE_URL.";
+const ensureDb = (res) => {
+  if (pool && dbReady) return true;
+  send(res, 503, { message: dbUnavailableMessage });
+  return false;
+};
 
 const STATIC_CONTENT_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -104,6 +108,7 @@ const verifyAuthToken = (token) => {
 };
 
 const initDb = async () => {
+  if (!pool) return;
   await pool.query(`
     CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
@@ -321,7 +326,11 @@ const server = createServer(async (req, res) => {
   const requestUrl = new URL(req.url ?? "/", `http://${req.headers.host ?? `localhost:${PORT}`}`);
 
   if (requestUrl.pathname === "/api/health" && req.method === "GET") {
-    send(res, 200, { ok: true });
+    send(res, 200, { ok: true, dbReady, hasDatabaseUrl: Boolean(DATABASE_URL) });
+    return;
+  }
+
+  if (requestUrl.pathname.startsWith("/api/") && requestUrl.pathname !== "/api/health" && !ensureDb(res)) {
     return;
   }
 
@@ -642,11 +651,15 @@ const server = createServer(async (req, res) => {
 
 initDb()
   .then(() => {
+    dbReady = Boolean(pool);
     server.listen(PORT, HOST, () => {
       console.log(`[Teamio] Server listening on http://${HOST}:${PORT}`);
     });
   })
   .catch((error) => {
+    dbReady = false;
     console.error("[Teamio] Грешка при инициализация на PostgreSQL:", error);
-    process.exit(1);
+    server.listen(PORT, HOST, () => {
+      console.log(`[Teamio] Server listening in degraded mode on http://${HOST}:${PORT}`);
+    });
   });
