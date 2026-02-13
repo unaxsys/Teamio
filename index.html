@@ -1,0 +1,674 @@
+<!doctype html>
+<html lang="bg">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Teamio – работни табла</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;600;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div class="auth-screen" id="auth-screen">
+      <div class="auth-card">
+        <section class="auth-welcome" aria-label="Добре дошли в Teamio">
+          <div class="auth-welcome__content">
+            <p class="auth-welcome__eyebrow">Добре дошли в Teamio</p>
+            <h1>Планирай деня си с лекота</h1>
+            <p>
+              Едно място за задачи, екипи и идеи — подредено, спокойно и винаги под ръка.
+            </p>
+            <div class="auth-welcome__chips">
+              <span>✨ Ясни приоритети</span>
+              <span>📅 Умен календар</span>
+              <span>🤝 Работа в екип</span>
+              <span>📊 Интуитивни отчети</span>
+            </div>
+          </div>
+          <div class="auth-welcome__art" aria-hidden="true">
+            <span class="blob blob--one"></span>
+            <span class="blob blob--two"></span>
+            <span class="blob blob--three"></span>
+          </div>
+        </section>
+        <div class="auth-brand">
+          <img class="brand__logo" id="auth-teamio-logo" alt="Teamio лого" hidden />
+          <span class="brand__dot" id="auth-teamio-dot"></span>
+          <div>
+            <p class="brand__name" id="auth-teamio-name">Teamio</p>
+            <p class="brand__tag">Работи лесно и красиво.</p>
+          </div>
+        </div>
+        <div class="auth-toggle">
+          <button
+            type="button"
+            class="ghost auth-toggle__button auth-toggle__button--active"
+            data-auth="login"
+          >
+            Вход
+          </button>
+          <button type="button" class="ghost auth-toggle__button" data-auth="register">
+            Регистрация
+          </button>
+        </div>
+        <form class="auth-form auth-form--active" id="login-form" method="post" action="javascript:void(0);">
+          <label>
+            Имейл
+            <input type="email" name="email" placeholder="team@company.com" required />
+          </label>
+          <label>
+            Парола
+            <input type="password" name="password" placeholder="••••••••" required />
+          </label>
+          <button type="submit" class="primary">Влез</button>
+          <button type="button" class="link-button" id="forgot-password">Забравена парола?</button>
+          <p class="auth-note">Нямаш акаунт? Създай го за секунди.</p>
+        </form>
+        <form class="auth-form" id="register-form" method="post" action="javascript:void(0);">
+          <label>
+            Име
+            <input type="text" name="name" placeholder="Мария Иванова" required />
+          </label>
+          <label>
+            Имейл
+            <input type="email" name="email" placeholder="team@company.com" required />
+          </label>
+          <label>
+            Парола
+            <input type="password" name="password" placeholder="Минимум 6 символа" minlength="6" required />
+          </label>
+          <button type="submit" class="primary">Създай акаунт</button>
+          <p class="auth-note">Вече имаш акаунт? Използвай вход.</p>
+        </form>
+        <div class="auth-message" id="auth-message" role="status" aria-live="polite"></div>
+        <div class="verification-help" id="verification-help"></div>
+      </div>
+    </div>
+
+    <div class="modal" id="reset-modal">
+      <div class="modal__card">
+        <h2>Възстановяване на парола</h2>
+        <form id="reset-request-form" method="post" action="javascript:void(0);">
+          <label>
+            Имейл
+            <input type="email" name="email" placeholder="team@company.com" required />
+          </label>
+          <button type="submit" class="primary">Изпрати линк</button>
+        </form>
+        <div class="reset-link" id="reset-link"></div>
+        <div class="modal__actions">
+          <button type="button" class="ghost" id="close-reset">Затвори</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal" id="new-password-modal">
+      <div class="modal__card">
+        <h2>Нова парола</h2>
+        <form id="new-password-form" method="post" action="javascript:void(0);">
+          <input type="hidden" name="token" />
+          <label>
+            Нова парола
+            <input type="password" name="password" placeholder="Минимум 6 символа" minlength="6" required />
+          </label>
+          <button type="submit" class="primary">Запази</button>
+        </form>
+        <div class="modal__actions">
+          <button type="button" class="ghost" id="close-new-password">Затвори</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="app app--hidden" id="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <img class="brand__logo" id="workspace-company-logo" alt="Лого на фирма" hidden />
+          <span class="brand__dot" id="workspace-company-dot"></span>
+          <div>
+            <p class="brand__name" id="workspace-company-name">Teamio</p>
+            <p class="brand__tag">Умно планиране</p>
+          </div>
+        </div>
+        <div class="profile">
+          <div class="profile__avatar" id="profile-avatar">ТИ</div>
+          <div>
+            <p class="profile__name" id="profile-name">Гост</p>
+            <button class="profile__logout" id="logout">Изход</button>
+          </div>
+        </div>
+        <nav class="nav">
+          <button class="nav__item nav__item--active" data-tab="boards">Табла</button>
+          <button class="nav__item" data-tab="teams">Екипи</button>
+          <button class="nav__item" data-tab="invites">Покани</button>
+          <button class="nav__item" data-tab="members">Members / Invites <span class="nav-badge" id="members-invites-badge">0</span></button>
+          <button class="nav__item" data-tab="calendar">Календар</button>
+          <button class="nav__item" data-tab="reports">Отчети</button>
+          <button class="nav__item" data-tab="settings">Настройки</button>
+        </nav>
+        <div class="sync">
+          <h3>Синхронизация</h3>
+          <p>Всички промени се записват локално и са готови за desktop версията.</p>
+          <div class="sync__status">
+            <span class="sync__dot"></span>
+            <span>Онлайн</span>
+          </div>
+        </div>
+      </aside>
+      <main class="main">
+        <header class="header board-global-header">
+          <div>
+            <h1>Работно табло</h1>
+            <p>Организирай задачите си с един поглед.</p>
+            <div class="workspace-company-chip" id="workspace-company-chip" hidden>
+              <img id="workspace-company-chip-logo" alt="Лого" hidden />
+              <span id="workspace-company-chip-name"></span>
+            </div>
+          </div>
+          <div class="header__actions">
+            <select id="board-selector" aria-label="Избор на борд"></select>
+            <button class="ghost" id="create-board">Нов борд</button>
+            <button class="ghost" id="new-column">Нова колона</button>
+            <button class="primary" id="new-board">Нова задача</button>
+          </div>
+        </header>
+
+        <aside class="board-side-menu" id="board-side-menu" aria-hidden="true">
+          <div class="board-side-menu__header">
+            <h3>Меню</h3>
+            <button type="button" class="ghost" id="close-board-menu">Затвори</button>
+          </div>
+          <div class="board-side-menu__content">
+            <button type="button" class="board-side-menu__item" id="menu-open-settings">Настройки</button>
+            <button type="button" class="board-side-menu__item" id="menu-add-column">Добави колона</button>
+            <button type="button" class="board-side-menu__item" id="menu-new-task">Добави задача</button>
+            <button type="button" class="board-side-menu__item" id="menu-rename-board">Преименувай борд</button>
+            <button type="button" class="board-side-menu__item" id="menu-delete-board">Изтрий борд</button>
+          </div>
+        </aside>
+        <div class="board-menu-overlay" id="board-menu-overlay" aria-hidden="true"></div>
+
+        <div class="board-stage tab-panel tab-panel--active" data-tab-panel="boards">
+          <section class="overview">
+            <div class="board-meta">
+              <div class="board-topbar">
+                <div class="board-topbar__title-wrap">
+                  <h2 id="current-board-name">Моето табло</h2>
+                  <span class="board-topbar__visibility">Workspace</span>
+                </div>
+                <div class="board-topbar__actions">
+                  <input
+                    type="search"
+                    id="board-search"
+                    placeholder="Търси задачи..."
+                    aria-label="Търси в таблото"
+                  />
+                  <button type="button" class="ghost board-icon-button" id="board-menu-button">⋯ Меню</button>
+                  <button type="button" class="ghost board-icon-button" id="column-picker-toggle">Колони</button>
+                  <button type="button" class="ghost board-icon-button" id="board-compact-toggle" aria-pressed="false">Compact</button>
+                </div>
+              </div>
+              <div class="board-tools">
+                <div class="column-picker" id="column-picker" hidden>
+                  <p class="column-picker__title">Видими колони</p>
+                  <div class="column-picker__list" id="column-picker-list"></div>
+                </div>
+              </div>
+              <div class="board-stats-row">
+                <div class="stat">
+                  <h4>Активни задачи</h4>
+                  <p id="stat-active">0</p>
+                </div>
+                <div class="stat">
+                  <h4>Хора във фирмата</h4>
+                  <p id="stat-team-size">0</p>
+                </div>
+                <div class="stat">
+                  <h4>Срокове тази седмица</h4>
+                  <p id="stat-due">0</p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <div class="board-canvas">
+            <section class="board" id="board"></section>
+          </div>
+        </div>
+
+        <section class="tab-panel" data-tab-panel="teams">
+          <div class="panel-card">
+            <h2>Екипи</h2>
+            <p>Създавай екипи, добавяй хора в 1 или няколко екипа и отделяй задачите по екипи.</p>
+            <div class="teams-toolbar">
+              <button type="button" class="ghost" id="open-team-create-modal">Добави екип</button>
+              <button type="button" class="primary" id="open-member-create-modal">Добави човек</button>
+            </div>
+            <div class="teams-grid">
+              <div>
+                <h3 class="teams-subtitle">Хора</h3>
+                <div class="panel-list" id="team-list"></div>
+              </div>
+              <div>
+                <h3 class="teams-subtitle">Екипи</h3>
+                <div class="panel-list" id="team-catalog"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-panel" data-tab-panel="invites">
+          <div class="panel-card">
+            <h2>Покани</h2>
+            <p>Тук можеш да приемеш или откажеш покана към фирма/workspace.</p>
+            <div class="panel-list" id="my-invite-list"></div>
+          </div>
+        </section>
+
+
+        <section class="tab-panel" data-tab-panel="members">
+          <div class="panel-card">
+            <h2>Members / Invites</h2>
+            <p>Управлявай покани и членове в workspace-а.</p>
+            <div class="panel-card" style="margin-top: 16px;">
+              <h3>Pending invites <span class="nav-badge nav-badge--inline" id="pending-invites-count">0</span></h3>
+              <form class="panel-form" id="invite-form">
+                <label>
+                  Имейл или потребителско ID
+                  <input type="text" name="inviteTarget" placeholder="name@company.com или user-123" required />
+                </label>
+                <label>
+                  Потребителско ID (по избор)
+                  <input type="text" name="invitedUserId" placeholder="user-123" />
+                </label>
+                <label>
+                  Потребителско ID (по избор)
+                  <input type="text" name="invitedUserId" placeholder="user-123" />
+                </label>
+                <label>
+                  Потребителско ID (по избор)
+                  <input type="text" name="invitedUserId" placeholder="user-123" />
+                </label>
+                <label>
+                  Потребителско ID (по избор)
+                  <input type="text" name="invitedUserId" placeholder="user-123" />
+                </label>
+                <label>
+                  Потребителско ID (по избор)
+                  <input type="text" name="invitedUserId" placeholder="user-123" />
+                </label>
+                <label>
+                  Потребителско ID (по избор)
+                  <input type="text" name="invitedUserId" placeholder="user-123" />
+                </label>
+                <label>
+                  Потребителско ID (по избор)
+                  <input type="text" name="invitedUserId" placeholder="user-123" />
+                </label>
+                <label>
+                  Потребителско ID (по избор)
+                  <input type="text" name="invitedUserId" placeholder="user-123" />
+                </label>
+                <label>
+                  Потребителско ID (по избор)
+                  <input type="text" name="invitedUserId" placeholder="user-123" />
+                </label>
+                <label>
+                  Роля
+                  <select name="role" required>
+                    <option value="Viewer">Viewer</option>
+                    <option value="Member" selected>Member</option>
+                    <option value="Manager">Manager</option>
+                    <option value="Admin">Admin</option>
+                  </select>
+                </label>
+                <button type="submit" class="primary panel-form__submit">Изпрати покана</button>
+              </form>
+              <div class="invite-share" id="invite-share" hidden>
+                <strong>Линк за поканата:</strong>
+                <div class="invite-share__row">
+                  <a id="invite-share-link" href="#" target="_blank" rel="noopener noreferrer"></a>
+                  <button type="button" class="ghost" id="invite-copy-link">Копирай</button>
+                  <button type="button" class="ghost" id="invite-share-native">Сподели</button>
+                </div>
+                <div class="invite-share__social">
+                  <a id="invite-share-whatsapp" href="#" target="_blank" rel="noopener noreferrer">WhatsApp</a>
+                  <a id="invite-share-facebook" href="#" target="_blank" rel="noopener noreferrer">Facebook</a>
+                  <a id="invite-share-telegram" href="#" target="_blank" rel="noopener noreferrer">Telegram</a>
+                </div>
+              </div>
+              <div class="panel-list" id="invite-list" style="margin-top: 12px;"></div>
+            </div>
+            <div class="panel-card" style="margin-top: 16px;">
+              <h3>Accepted members</h3>
+              <div class="panel-list" id="accepted-members-list"></div>
+            </div>
+          </div>
+        </section>
+        <section class="tab-panel" data-tab-panel="calendar">
+          <div class="panel-card">
+            <h2>Календар</h2>
+            <p>Визуализирай срокове и ключови събития за седмицата.</p>
+            <form class="panel-form" id="calendar-form">
+              <label>
+                Събитие
+                <input type="text" name="title" placeholder="Sprint planning" required />
+              </label>
+              <label>
+                Дата
+                <input type="date" name="date" required />
+              </label>
+              <button type="submit" class="primary panel-form__submit">Добави събитие</button>
+            </form>
+            <div class="panel-list" id="calendar-list"></div>
+            <div class="calendar-toolbar">
+              <label>
+                Изглед
+                <select id="calendar-view">
+                  <option value="week">Седмица</option>
+                  <option value="month">Месец</option>
+                </select>
+              </label>
+              <label>
+                Отиди на дата
+                <input type="date" id="calendar-focus-date" />
+              </label>
+              <div class="calendar-toolbar__actions">
+                <button type="button" class="ghost" id="calendar-prev">Назад</button>
+                <button type="button" class="ghost" id="calendar-today">Днес</button>
+                <button type="button" class="ghost" id="calendar-next">Напред</button>
+              </div>
+            </div>
+            <div class="calendar-grid" id="calendar-grid"></div>
+          </div>
+        </section>
+
+        <section class="tab-panel" data-tab-panel="reports">
+          <div class="panel-card">
+            <h2>Отчети</h2>
+            <p>Проследявай прогрес и вижай трендове по екипи и проекти.</p>
+            <div class="reports-grid">
+              <div class="report-tile">
+                <h3>Завършени задачи</h3>
+                <p class="report-number" id="report-done">0</p>
+                <div class="report-bar"><span></span></div>
+              </div>
+              <div class="report-tile">
+                <h3>Активни проекти</h3>
+                <p class="report-number" id="report-active">0</p>
+                <div class="report-bar report-bar--alt"><span></span></div>
+              </div>
+              <div class="report-tile">
+                <h3>Скорост на екипа</h3>
+                <p class="report-number" id="report-velocity">0%</p>
+                <div class="report-bar report-bar--third"><span></span></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-panel" data-tab-panel="settings">
+          <div class="panel-card">
+            <h2>Настройки</h2>
+            <p>Персонализирай цветовете и предпочитанията на таблото.</p>
+            <div class="settings-grid settings-accordion" id="settings-accordion">
+              <section class="setting-item setting-item--accordion setting-item--open" data-setting-key="company">
+                <button type="button" class="setting-item__toggle">
+                  <span>Фирмени данни</span>
+                  <span class="setting-item__chevron">▾</span>
+                </button>
+                <div class="setting-item__body">
+                  <p>Само собственикът може да вижда и редактира тези данни.</p>
+                  <form id="company-profile-form" class="stacked-form">
+                    <label>
+                      Име на фирма
+                      <input type="text" name="name" placeholder="Пример: Teamio OOD" required />
+                    </label>
+                    <label>
+                      ЕИК / Булстат
+                      <input type="text" name="vatId" placeholder="Пример: 123456789" />
+                    </label>
+                    <label>
+                      ДДС номер
+                      <input type="text" name="vatNumber" placeholder="Пример: BG123456789" />
+                    </label>
+                    <label>
+                      Адрес
+                      <textarea name="address" rows="2" placeholder="Град, улица, номер"></textarea>
+                    </label>
+                    <label>
+                      Лого
+                      <input type="file" name="logo" accept="image/*" />
+                    </label>
+                    <button type="submit" class="primary">Запази фирмени данни</button>
+                  </form>
+                </div>
+              </section>
+
+              <section class="setting-item setting-item--accordion" data-setting-key="accent">
+                <button type="button" class="setting-item__toggle">
+                  <span>Акцентен цвят</span>
+                  <span class="setting-item__chevron">▾</span>
+                </button>
+                <div class="setting-item__body">
+                  <p>Избери основен акцент за интерфейса.</p>
+                  <div class="color-options">
+                    <button type="button" class="color-swatch" data-color="#5b6bff"></button>
+                    <button type="button" class="color-swatch" data-color="#2bb8a1"></button>
+                    <button type="button" class="color-swatch" data-color="#f8b259"></button>
+                    <button type="button" class="color-swatch" data-color="#ff7a7a"></button>
+                    <button type="button" class="color-swatch" data-color="#6dd3ff"></button>
+                  </div>
+                </div>
+              </section>
+
+              <section class="setting-item setting-item--accordion" data-setting-key="density">
+                <button type="button" class="setting-item__toggle">
+                  <span>Плътност</span>
+                  <span class="setting-item__chevron">▾</span>
+                </button>
+                <div class="setting-item__body">
+                  <p>Избери компактна или комфортна визия.</p>
+                  <div class="density-toggle">
+                    <button type="button" class="ghost density-button" data-density="comfortable">Комфортно</button>
+                    <button type="button" class="ghost density-button" data-density="compact">Компактно</button>
+                  </div>
+                </div>
+              </section>
+
+              <section class="setting-item setting-item--accordion" data-setting-key="calendar">
+                <button type="button" class="setting-item__toggle">
+                  <span>Календар и отчети</span>
+                  <span class="setting-item__chevron">▾</span>
+                </button>
+                <div class="setting-item__body">
+                  <p>Контролирай началния ден, уикенд оцветяване и критерия за завършени задачи.</p>
+                  <label>
+                    Начален ден на седмицата
+                    <select id="week-start-day">
+                      <option value="monday">Понеделник</option>
+                      <option value="sunday">Неделя</option>
+                      <option value="saturday">Събота</option>
+                    </select>
+                  </label>
+                  <label class="setting-check">
+                    <input type="checkbox" id="setting-highlight-weekend" checked />
+                    Оцветявай събота и неделя различно
+                  </label>
+                  <label class="setting-check">
+                    <input type="checkbox" id="setting-done-by-column" checked />
+                    Завършена задача, ако е в колона „Готово“
+                  </label>
+                  <label class="setting-check">
+                    <input type="checkbox" id="setting-done-by-flag" />
+                    Завършена задача, ако е маркирана в детайлите
+                  </label>
+                  <p class="panel-list__meta" id="done-criteria-help"></p>
+                </div>
+              </section>
+
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="modal" id="modal">
+      <div class="modal__card">
+        <h2>Нова задача</h2>
+        <form id="task-form">
+          <label>
+            Заглавие
+            <input type="text" name="title" placeholder="Напр. UX преглед" required />
+          </label>
+          <label>
+            Описание
+            <textarea name="description" rows="3" placeholder="Какво трябва да бъде направено?"></textarea>
+          </label>
+          <label>
+            Срок
+            <input type="date" name="due" />
+          </label>
+          <label>
+            Колона
+            <select name="column">
+              <option value="backlog">Backlog</option>
+              <option value="progress">В процес</option>
+              <option value="review">Преглед</option>
+              <option value="done">Готово</option>
+            </select>
+          </label>
+          <label>
+            Ниво
+            <select name="level">
+              <option value="L1">L1 – Стратегическо</option>
+              <option value="L2" selected>L2 – Оперативно</option>
+              <option value="L3">L3 – Детайлно</option>
+            </select>
+          </label>
+          <label>
+            Екипи
+            <select name="teamIds" id="task-team-ids" multiple required></select>
+          </label>
+          <div class="modal__actions">
+            <button type="button" class="ghost" id="close-modal">Отказ</button>
+            <button type="submit" class="primary">Добави</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal" id="task-details-modal">
+      <div class="modal__card modal__card--wide">
+        <h2>Детайли на задача</h2>
+        <form id="task-details-form" class="stacked-form">
+          <input type="hidden" name="taskId" />
+          <label>
+            Заглавие
+            <input type="text" name="title" required />
+          </label>
+          <label>
+            Описание
+            <textarea name="description" rows="4" placeholder="Описание"></textarea>
+          </label>
+          <label>
+            Срок
+            <input type="date" name="due" />
+          </label>
+          <label>
+            Ниво
+            <select name="level">
+              <option value="L1">L1 – Стратегическо</option>
+              <option value="L2">L2 – Оперативно</option>
+              <option value="L3">L3 – Детайлно</option>
+            </select>
+          </label>
+          <label>
+            Присвоена към
+            <select name="assignedUserId" id="task-details-assignee">
+              <option value="">Няма</option>
+            </select>
+          </label>
+          <label class="setting-check">
+            <input type="checkbox" name="completed" />
+            Маркирай като завършена
+          </label>
+          <div class="modal__actions">
+            <button type="button" class="ghost" id="close-task-details">Затвори</button>
+            <button type="submit" class="primary">Запази</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal" id="team-create-modal">
+      <div class="modal__card modal__card--wide">
+        <h2>Добави екип</h2>
+        <form id="team-create-form">
+          <label>
+            Име на екипа
+            <input type="text" name="teamName" placeholder="Продуктов екип" required />
+          </label>
+          <div class="modal__actions">
+            <button type="button" class="ghost" id="close-team-create-modal">Отказ</button>
+            <button type="submit" class="primary">Запази</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal" id="member-create-modal">
+      <div class="modal__card modal__card--wide">
+        <h2>Добави човек</h2>
+        <form class="panel-form" id="team-form">
+          <label>
+            Име
+            <input type="text" name="name" placeholder="Име и фамилия" required />
+          </label>
+          <label>
+            Роля
+            <select name="role" required>
+              <option value="Viewer">Viewer</option>
+              <option value="Member" selected>Member</option>
+              <option value="Manager">Manager</option>
+              <option value="Admin">Admin</option>
+            </select>
+          </label>
+          <label>
+            Екипи
+            <select name="teamIds" id="member-team-ids" multiple required></select>
+          </label>
+          <div class="modal__actions modal__actions--full">
+            <button type="button" class="ghost" id="close-member-create-modal">Отказ</button>
+            <button type="submit" class="primary">Добави</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+
+    <div class="modal" id="list-limit-modal">
+      <div class="modal__card modal__card--wide">
+        <h2>Лимит за колона</h2>
+        <form id="list-limit-form">
+          <input type="hidden" name="columnId" />
+          <label>
+            Максимален брой карти
+            <input type="number" name="wipLimit" min="1" step="1" placeholder="напр. 5" />
+          </label>
+          <p class="panel-list__meta">Колоната ще се маркира, ако картите надвишат лимита.</p>
+          <div class="modal__actions">
+            <button type="button" class="ghost" id="close-list-limit-modal">Отказ</button>
+            <button type="button" class="ghost" id="remove-list-limit">Премахни лимита</button>
+            <button type="submit" class="primary">Запази</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
