@@ -587,6 +587,7 @@ body.is-board-canvas-dragging {
   height: 8px;
 }
 
+.board-canvas::-webkit-scrollbar-thumb,
 .board::-webkit-scrollbar-thumb {
   background: rgba(91, 107, 255, 0.25);
   border-radius: 999px;
