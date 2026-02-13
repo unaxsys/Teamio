@@ -685,19 +685,26 @@ const applyManagementAccessUi = () => {
 const loadApiBase = () => {
   const storedBase = (localStorage.getItem("teamio-api-base") ?? "").trim();
   const currentOrigin = window.location.origin;
+  const { protocol, hostname } = window.location;
+
+  const buildApiOriginFromCurrentHost = (port = "8787") => {
+    const normalizedPort = normalizeText(port);
+    return `${protocol}//${hostname}${normalizedPort ? `:${normalizedPort}` : ""}`;
+  };
 
   if (!storedBase) {
-    return currentOrigin;
+    return buildApiOriginFromCurrentHost();
   }
 
   try {
     const parsed = new URL(storedBase, currentOrigin);
     if (window.location.hostname !== "localhost" && ["localhost", "127.0.0.1"].includes(parsed.hostname)) {
-      return currentOrigin;
+      const parsedPort = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+      return buildApiOriginFromCurrentHost(parsedPort);
     }
     return parsed.origin;
   } catch {
-    return currentOrigin;
+    return buildApiOriginFromCurrentHost();
   }
 };
 
