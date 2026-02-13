@@ -19,6 +19,11 @@
   box-sizing: border-box;
 }
 
+html,
+body {
+  overflow-x: hidden;
+}
+
 body {
   margin: 0;
   background: linear-gradient(140deg, #f4f6ff 0%, #fef6f8 45%, #f5fbff 100%);
@@ -29,6 +34,7 @@ body {
   display: grid;
   grid-template-columns: 260px 1fr;
   min-height: 100vh;
+  min-width: 0;
 }
 
 .app--hidden {
@@ -421,6 +427,7 @@ body {
 
 .main {
   padding: 32px 40px 48px;
+  min-width: 0;
 }
 
 .header {
@@ -1397,6 +1404,20 @@ body {
   border-radius: 16px;
   margin: 10px;
   min-height: calc(100vh - 20px);
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.board-global-header {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  width: 100%;
+}
+
+.board-stage {
+  width: 100%;
+  min-width: 0;
 }
 
 .board-global-header {
