@@ -549,6 +549,7 @@ body {
   overflow-x: auto;
   overflow-y: hidden;
   padding: 0 0 16px;
+  width: 100%;
 }
 
 .board {
@@ -556,7 +557,7 @@ body {
   gap: 16px;
   align-items: flex-start;
   min-width: max-content;
-  padding: 0 16px 8px;
+  padding: 0 8px 8px;
 }
 
 .board-canvas::-webkit-scrollbar,
@@ -735,9 +736,6 @@ body {
   display: flex;
 }
 
-.overview.tab-panel--active {
-  display: block;
-}
 
 .board-filter {
   display: grid;
@@ -1404,6 +1402,15 @@ body {
   position: sticky;
   top: 0;
   z-index: 30;
+  max-width: 1420px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.board-stage {
+  width: 100%;
+  max-width: 1420px;
+  margin: 0 auto;
 }
 
 .header {
