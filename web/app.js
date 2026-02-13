@@ -307,11 +307,12 @@ const normalizeBoard = (board) => {
   const currentUser = loadCurrentUser();
   const workspace = getCurrentWorkspace();
   const members = Array.isArray(board.members) ? board.members : [];
+  const workspaceId = board.workspaceId === undefined ? workspace?.id ?? null : board.workspaceId;
   return {
     ...board,
     visibility: BOARD_VISIBILITIES.includes(board.visibility) ? board.visibility : "workspace",
     createdBy: board.createdBy ?? currentUser?.id ?? null,
-    workspaceId: board.workspaceId ?? workspace?.id ?? null,
+    workspaceId,
     members,
     settings: {
       allowComments: board.settings?.allowComments ?? true,
@@ -3109,7 +3110,7 @@ createBoardButton?.addEventListener("click", () => {
     return;
   }
   const boards = loadBoards();
-  const boardId = `board-${Date.now()}`;
+  const boardId = `board-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
   const workspace = getCurrentWorkspace();
   const currentUser = loadCurrentUser();
   boards.push(
