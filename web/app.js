@@ -124,6 +124,9 @@ const columnPickerListEl = document.getElementById("column-picker-list");
 const boardCompactToggleButton = document.getElementById("board-compact-toggle");
 
 let boardSearchQuery = "";
+let isBoardCanvasDragging = false;
+let boardCanvasDragStartX = 0;
+let boardCanvasDragStartScrollLeft = 0;
 let visibleColumnIds = [];
 let pinnedColumnIds = [];
 
@@ -3259,6 +3262,37 @@ boardCanvasEl?.addEventListener("wheel", (event) => {
   boardCanvasEl.scrollLeft += event.deltaY;
   event.preventDefault();
 }, { passive: false });
+
+boardCanvasEl?.addEventListener("mousedown", (event) => {
+  if (event.button != 0) {
+    return;
+  }
+  if (event.target.closest("button, input, textarea, select, a, label, [draggable='true']")) {
+    return;
+  }
+  isBoardCanvasDragging = true;
+  boardCanvasDragStartX = event.pageX;
+  boardCanvasDragStartScrollLeft = boardCanvasEl.scrollLeft;
+  boardCanvasEl.classList.add("board-canvas--dragging");
+  document.body.classList.add("is-board-canvas-dragging");
+});
+
+window.addEventListener("mousemove", (event) => {
+  if (!isBoardCanvasDragging || !boardCanvasEl) {
+    return;
+  }
+  const delta = event.pageX - boardCanvasDragStartX;
+  boardCanvasEl.scrollLeft = boardCanvasDragStartScrollLeft - delta;
+});
+
+window.addEventListener("mouseup", () => {
+  if (!isBoardCanvasDragging || !boardCanvasEl) {
+    return;
+  }
+  isBoardCanvasDragging = false;
+  boardCanvasEl.classList.remove("board-canvas--dragging");
+  document.body.classList.remove("is-board-canvas-dragging");
+});
 
 boardFilterButton?.addEventListener("click", () => {
   activateTab("settings");

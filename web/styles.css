@@ -558,6 +558,15 @@ body {
   padding: 0 0 16px;
   width: 100%;
   scrollbar-gutter: stable;
+  cursor: grab;
+}
+
+.board-canvas--dragging {
+  cursor: grabbing;
+}
+
+body.is-board-canvas-dragging {
+  user-select: none;
 }
 
 .board {
@@ -1418,17 +1427,6 @@ body {
 .board-stage {
   width: 100%;
   min-width: 0;
-}
-
-.board-global-header {
-  position: sticky;
-  top: 0;
-  z-index: 30;
-  width: 100%;
-}
-
-.board-stage {
-  width: 100%;
 }
 
 .header {
