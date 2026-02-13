@@ -1693,7 +1693,14 @@ const renderBoard = (tasks) => {
       }
       const updated = allTasks.map((task) => {
         if (task.id !== taskId) return task;
-        return normalizeTaskCompletion({ ...task, column: column.id, listId: column.id });
+        const movedToDoneColumn = isDoneColumn(column.id);
+        return normalizeTaskCompletion({
+          ...task,
+          column: column.id,
+          listId: column.id,
+          status: movedToDoneColumn ? "done" : (task.status === "done" ? "todo" : (task.status ?? "todo")),
+          completed: movedToDoneColumn ? true : false,
+        });
       });
       saveTasks(updated);
       renderBoard(getVisibleTasks());
