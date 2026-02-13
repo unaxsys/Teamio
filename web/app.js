@@ -702,13 +702,45 @@ const loadApiBase = () => {
 
 const apiRequest = async (path, options = {}) => {
   const base = loadApiBase();
-  try {
-    const response = await fetch(`${base}${path}`, {
+  const sameOriginBase = window.location.origin;
+  const fetchJson = async (apiBase) => {
+    const response = await fetch(`${apiBase}${path}`, {
       headers: { "Content-Type": "application/json", ...(options.headers ?? {}) },
       ...options,
     });
-    const data = await response.json().catch(() => ({}));
+
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      const data = await response.json().catch(() => ({}));
+      return { response, data };
+    }
+
+    const text = await response.text().catch(() => "");
+    return { response, data: { message: text.slice(0, 200) || "Непозната грешка от сървъра." } };
+  };
+
+  try {
+    let { response, data } = await fetchJson(base);
+
+    if (
+      !response.ok &&
+      response.status >= 500 &&
+      base !== sameOriginBase &&
+      !["localhost", "127.0.0.1"].includes(window.location.hostname)
+    ) {
+      ({ response, data } = await fetchJson(sameOriginBase));
+    }
+
     if (!response.ok) {
+      if (response.status === 502) {
+        return {
+          ok: false,
+          data: {
+            message:
+              "Сървърът върна 502 Bad Gateway. Вероятно backend процесът е паднал или reverse proxy не може да се свърже към него.",
+          },
+        };
+      }
       return { ok: false, data };
     }
     return { ok: true, data };
@@ -716,7 +748,7 @@ const apiRequest = async (path, options = {}) => {
     const isGithubPages = window.location.hostname.endsWith("github.io");
     const hint = isGithubPages
       ? ` Нужен е външен API сървър. Задай го така: localStorage.setItem("teamio-api-base", "https://your-api-domain.com") и презареди.`
-      : "";
+      : ` Ако си на IP сървър, пробвай: localStorage.removeItem("teamio-api-base"); location.reload()`;
     return { ok: false, data: { message: `Сървърът не е достъпен (${base}).${hint}` } };
   }
 };

@@ -147,6 +147,12 @@ After deploy, open exactly this URL:
 > localStorage.setItem("teamio-api-base", "https://your-api-domain.com")
 > location.reload()
 > ```
+>
+> Пример с IP (без домейн):
+> ```js
+> localStorage.setItem("teamio-api-base", "http://46.183.117.128")
+> location.reload()
+> ```
 
 ### If you get 404
 - Make sure you are opening exactly `https://unaxsys.github.io/Teamio/` (no extra characters after `/`).
