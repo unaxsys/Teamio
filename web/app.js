@@ -1018,7 +1018,7 @@ const startInvitesPolling = () => {
 const startWorkspacePolling = () => {
   stopWorkspacePolling();
   workspacePollTimer = setInterval(async () => {
-    const changed = await pullWorkspaceState({ force: true });
+    const changed = await pullWorkspaceState();
     if (!changed) {
       return;
     }
