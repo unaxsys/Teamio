@@ -1534,7 +1534,9 @@ const isDoneColumn = (columnId) => {
 };
 
 const normalizeTaskCompletion = (task) => {
-  const completed = Boolean(task.completed) || task.status === "done" || isDoneColumn(task.column);
+  const completedByColumn = preferences.doneByColumn && isDoneColumn(task.column);
+  const completedByFlag = preferences.doneByFlag && (Boolean(task.completed) || task.status === "done");
+  const completed = completedByColumn || completedByFlag;
   return {
     ...task,
     completed,
