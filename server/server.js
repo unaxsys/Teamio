@@ -39,16 +39,33 @@ loadEnvFile(path.join(process.cwd(), ".env"));
 
 const PORT = Number(process.env.PORT ?? 8787);
 const HOST = process.env.HOST || "0.0.0.0";
-const DATABASE_URL = (process.env.DATABASE_URL || "").trim();
 const JWT_SECRET = (process.env.JWT_SECRET || "teamio-dev-secret").trim();
 const WEB_DIR = path.join(__dirname, "../web");
 
+const normalizeEnvValue = (value) => {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  if (text === "undefined" || text === "null") return "";
+  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
+    return text.slice(1, -1).trim();
+  }
+  return text;
+};
+
+const readEnv = (...keys) => {
+  for (const key of keys) {
+    const value = normalizeEnvValue(process.env[key]);
+    if (value) return value;
+  }
+  return "";
+};
+
 const buildConnStringFromParts = () => {
-  const host = (process.env.DB_HOST || "").trim();
-  const port = (process.env.DB_PORT || "5432").trim();
-  const name = (process.env.DB_NAME || "").trim();
-  const user = (process.env.DB_USER || "").trim();
-  const pass = (process.env.DB_PASS || "").trim();
+  const host = readEnv("DB_HOST", "PGHOST");
+  const port = readEnv("DB_PORT", "PGPORT") || "5432";
+  const name = readEnv("DB_NAME", "PGDATABASE");
+  const user = readEnv("DB_USER", "PGUSER");
+  const pass = readEnv("DB_PASS", "PGPASSWORD");
 
   if (!host || !name || !user) return "";
   // encode password safely (handles * # ! etc.)
@@ -57,6 +74,7 @@ const buildConnStringFromParts = () => {
   return `postgresql://${encUser}:${encPass}@${host}:${port}/${name}`;
 };
 
+const DATABASE_URL = readEnv("DATABASE_URL", "DB_URL", "POSTGRES_URL", "POSTGRESQL_URL");
 const EFFECTIVE_DB_URL = DATABASE_URL || buildConnStringFromParts();
 
 const pool = EFFECTIVE_DB_URL ? new Pool({ connectionString: EFFECTIVE_DB_URL }) : null;
