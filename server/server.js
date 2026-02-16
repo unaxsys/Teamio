@@ -35,6 +35,7 @@ const loadEnvFile = (envFilePath) => {
 };
 
 loadEnvFile(path.join(__dirname, ".env"));
+loadEnvFile(path.join(process.cwd(), ".env"));
 
 const PORT = Number(process.env.PORT ?? 8787);
 const HOST = process.env.HOST || "0.0.0.0";
@@ -59,12 +60,31 @@ const buildConnStringFromParts = () => {
 const EFFECTIVE_DB_URL = DATABASE_URL || buildConnStringFromParts();
 
 const pool = EFFECTIVE_DB_URL ? new Pool({ connectionString: EFFECTIVE_DB_URL }) : null;
-let dbReady = Boolean(pool);
+const dbConfigSource = DATABASE_URL ? "DATABASE_URL" : EFFECTIVE_DB_URL ? "DB_PARTS" : "NONE";
+let dbReady = false;
+let dbInitError = null;
 
 const dbUnavailableMessage =
   "Базата не е конфигурирана или е недостъпна. Провери DATABASE_URL или DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASS.";
-const ensureDb = (res) => {
+
+const tryRecoverDb = async () => {
+  if (!pool) return false;
+  try {
+    await pool.query("SELECT 1");
+    dbReady = true;
+    dbInitError = null;
+    return true;
+  } catch (error) {
+    dbReady = false;
+    dbInitError = String(error?.message || error);
+    return false;
+  }
+};
+
+const ensureDb = async (res) => {
   if (pool && dbReady) return true;
+  const recovered = await tryRecoverDb();
+  if (recovered) return true;
   send(res, 503, { message: dbUnavailableMessage });
   return false;
 };
@@ -476,11 +496,11 @@ const server = createServer(async (req, res) => {
   const requestUrl = new URL(req.url ?? "/", `http://${req.headers.host ?? `localhost:${PORT}`}`);
 
   if (requestUrl.pathname === "/api/health" && req.method === "GET") {
-    send(res, 200, { ok: true, dbReady, hasDatabaseUrl: Boolean(DATABASE_URL) });
+    send(res, 200, { ok: true, dbReady, hasDatabaseUrl: Boolean(EFFECTIVE_DB_URL), dbConfigSource, dbInitError });
     return;
   }
 
-  if (requestUrl.pathname.startsWith("/api/") && requestUrl.pathname !== "/api/health" && !ensureDb(res)) {
+  if (requestUrl.pathname.startsWith("/api/") && requestUrl.pathname !== "/api/health" && !(await ensureDb(res))) {
     return;
   }
 
@@ -1341,14 +1361,15 @@ const server = createServer(async (req, res) => {
 });
 
 initDb()
-  .then(() => {
-    dbReady = Boolean(pool);
+  .then(async () => {
+    dbReady = await tryRecoverDb();
     server.listen(PORT, HOST, () => {
-      console.log(`[Teamio] Server listening on http://${HOST}:${PORT}`);
+      console.log(`[Teamio] Server listening on http://${HOST}:${PORT} (dbReady=${dbReady}, dbConfigSource=${dbConfigSource})`);
     });
   })
   .catch((error) => {
     dbReady = false;
+    dbInitError = String(error?.message || error);
     console.error("[Teamio] Грешка при инициализация на PostgreSQL:", error);
     server.listen(PORT, HOST, () => {
       console.log(`[Teamio] Server listening in degraded mode on http://${HOST}:${PORT}`);
