@@ -156,7 +156,9 @@ const requireAuth = (req, res) => {
 
 const getMembership = async (client, tenantId, accountId) => {
   const membershipRes = await client.query(
-    `SELECT * FROM public.tenant_members WHERE tenant_id = $1 AND account_id = $2 AND status = 'ACTIVE'`,
+    `SELECT workspace_id, account_id, role, active, created_at
+     FROM public.workspace_memberships
+     WHERE workspace_id = $1 AND account_id = $2 AND active = true`,
     [tenantId, accountId]
   );
   return membershipRes.rows[0] ?? null;
@@ -399,11 +401,11 @@ const mapAccountContext = async (client, claims) => {
   const account = accountRes.rows[0];
 
   const membersRes = await client.query(
-    `SELECT tm.account_id, tm.role, tm.joined_at, a.email, a.display_name
-     FROM public.tenant_members tm
-     JOIN public.accounts a ON a.id = tm.account_id
-     WHERE tm.tenant_id = $1 AND tm.status = 'ACTIVE'
-     ORDER BY tm.joined_at DESC`,
+    `SELECT wm.account_id, wm.role, wm.created_at AS joined_at, a.email, a.display_name
+     FROM public.workspace_memberships wm
+     JOIN public.accounts a ON a.id = wm.account_id
+     WHERE wm.workspace_id = $1 AND wm.active = true
+     ORDER BY wm.created_at DESC`,
     [claims.tenantId]
   );
 
@@ -495,12 +497,6 @@ const server = createServer(async (req, res) => {
           [email, hashPassword(password), name, publicId, tenantId]
         )
       ).rows[0];
-
-      await client.query(
-        `INSERT INTO public.tenant_members (tenant_id, account_id, role, status)
-         VALUES ($1, $2, 'OWNER', 'ACTIVE')`,
-        [tenantId, account.id]
-      );
       await client.query(
         `INSERT INTO public.workspace_memberships (workspace_id, account_id, role, active)
          VALUES ($1, $2, 'OWNER', true)
@@ -538,10 +534,10 @@ const server = createServer(async (req, res) => {
     }
 
     const membershipRes = await pool.query(
-      `SELECT tm.tenant_id, tm.role
-       FROM public.tenant_members tm
-       WHERE tm.account_id = $1 AND tm.status = 'ACTIVE'
-       ORDER BY CASE tm.role WHEN 'OWNER' THEN 0 ELSE 1 END, tm.joined_at ASC
+      `SELECT wm.workspace_id AS tenant_id, wm.role
+       FROM public.workspace_memberships wm
+       WHERE wm.account_id = $1 AND wm.active = true
+       ORDER BY CASE wm.role WHEN 'OWNER' THEN 0 ELSE 1 END, wm.created_at ASC
        LIMIT 1`,
       [account.id]
     );
@@ -1082,13 +1078,6 @@ const server = createServer(async (req, res) => {
       }
 
       await client.query(
-        `INSERT INTO public.tenant_members (tenant_id, account_id, role, status)
-         VALUES ($1, $2, $3, 'ACTIVE')
-         ON CONFLICT (tenant_id, account_id)
-         DO UPDATE SET role = EXCLUDED.role, status = 'ACTIVE'`,
-        [invite.tenant_id, claims.accountId, invite.role]
-      );
-      await client.query(
         `INSERT INTO public.workspace_memberships (workspace_id, account_id, role, active)
          VALUES ($1, $2, $3, true)
          ON CONFLICT (workspace_id, account_id)
@@ -1194,10 +1183,10 @@ const server = createServer(async (req, res) => {
           return;
         }
         await client.query(
-          `INSERT INTO public.tenant_members (tenant_id, account_id, role, status)
-           VALUES ($1, $2, $3, 'ACTIVE')
-           ON CONFLICT (tenant_id, account_id)
-           DO UPDATE SET role = EXCLUDED.role, status = 'ACTIVE'`,
+          `INSERT INTO public.workspace_memberships (workspace_id, account_id, role, active)
+           VALUES ($1, $2, $3, true)
+           ON CONFLICT (workspace_id, account_id)
+           DO UPDATE SET role = EXCLUDED.role, active = true`,
           [invite.tenant_id, claims.accountId, invite.role]
         );
         await client.query(`UPDATE public.tenant_invites SET status = 'ACCEPTED', responded_at = now() WHERE id = $1`, [inviteId]);
@@ -1243,7 +1232,9 @@ const server = createServer(async (req, res) => {
         return { status: 409, body: { message: "Owner не може да бъде премахнат без transfer ownership." } };
       }
       await client.query(
-        `UPDATE public.tenant_members SET status = 'REMOVED' WHERE tenant_id = $1 AND account_id = $2`,
+        `UPDATE public.workspace_memberships
+         SET active = false
+         WHERE workspace_id = $1 AND account_id = $2`,
         [claims.tenantId, memberId]
       );
       return { status: 200, body: { ok: true } };
@@ -1255,11 +1246,11 @@ const server = createServer(async (req, res) => {
     await withTenant(req, res, async (client, claims) => {
       const acceptedMembers = (
         await client.query(
-          `SELECT tm.account_id AS id, a.email, a.display_name AS name, tm.role, tm.joined_at AS "joinedAt"
-           FROM public.tenant_members tm
-           JOIN public.accounts a ON a.id = tm.account_id
-           WHERE tm.tenant_id = $1 AND tm.status = 'ACTIVE'
-           ORDER BY tm.joined_at DESC`,
+          `SELECT wm.account_id AS id, a.email, a.display_name AS name, wm.role, wm.created_at AS "joinedAt"
+           FROM public.workspace_memberships wm
+           JOIN public.accounts a ON a.id = wm.account_id
+           WHERE wm.workspace_id = $1 AND wm.active = true
+           ORDER BY wm.created_at DESC`,
           [claims.tenantId]
         )
       ).rows;
