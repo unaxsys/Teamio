@@ -164,6 +164,18 @@ const getMembership = async (client, tenantId, accountId) => {
   return membershipRes.rows[0] ?? null;
 };
 
+const getDefaultActiveMembership = async (client, accountId) => {
+  const membershipRes = await client.query(
+    `SELECT workspace_id, role, active, created_at
+     FROM public.workspace_memberships
+     WHERE account_id = $1 AND active = true AND workspace_id IS NOT NULL
+     ORDER BY CASE role WHEN 'OWNER' THEN 0 ELSE 1 END, created_at ASC
+     LIMIT 1`,
+    [accountId]
+  );
+  return membershipRes.rows[0] ?? null;
+};
+
 const requireWorkspaceRole = async (client, workspaceId, accountId, allowedRoles = []) => {
   const membership = await getMembership(client, workspaceId, accountId);
   if (!membership) return null;
@@ -358,14 +370,22 @@ const createTenantSchema = async (client, tenantId, schemaName, owner) => {
 
 const withTenant = async (req, res, handler) => {
   const claims = requireAuth(req, res);
-  if (!claims?.tenantId) {
+  if (!claims) {
     return;
   }
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const tenantResult = await client.query(`SELECT schema_name FROM public.tenants WHERE tenant_id = $1`, [claims.tenantId]);
+    const defaultMembership = await getDefaultActiveMembership(client, claims.accountId);
+    const effectiveTenantId = normalizeText(claims.tenantId) || defaultMembership?.workspace_id || null;
+    if (!effectiveTenantId) {
+      await client.query("ROLLBACK");
+      send(res, 403, { message: "Нямаш достъп до workspace." });
+      return;
+    }
+
+    const tenantResult = await client.query(`SELECT schema_name FROM public.tenants WHERE tenant_id = $1`, [effectiveTenantId]);
     const tenant = tenantResult.rows[0];
     if (!tenant) {
       await client.query("ROLLBACK");
@@ -373,7 +393,7 @@ const withTenant = async (req, res, handler) => {
       return;
     }
 
-    const membership = await getMembership(client, claims.tenantId, claims.accountId);
+    const membership = await getMembership(client, effectiveTenantId, claims.accountId);
     if (!membership) {
       await client.query("ROLLBACK");
       send(res, 403, { message: "Нямаш достъп до този workspace." });
@@ -382,7 +402,7 @@ const withTenant = async (req, res, handler) => {
 
     const qSchema = quoteIdent(tenant.schema_name);
     await client.query(`SET LOCAL search_path TO ${qSchema}, public`);
-    const output = await handler(client, { ...claims, membershipRole: membership.role }, tenant, membership);
+    const output = await handler(client, { ...claims, tenantId: effectiveTenantId, membershipRole: membership.role }, tenant, membership);
     await client.query("COMMIT");
     if (output) send(res, output.status ?? 200, output.body ?? { ok: true });
   } catch (error) {
@@ -533,20 +553,15 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    const membershipRes = await pool.query(
-      `SELECT wm.workspace_id AS tenant_id, wm.role
-       FROM public.workspace_memberships wm
-       WHERE wm.account_id = $1 AND wm.active = true
-       ORDER BY CASE wm.role WHEN 'OWNER' THEN 0 ELSE 1 END, wm.created_at ASC
-       LIMIT 1`,
-      [account.id]
-    );
-    const membership = membershipRes.rows[0];
+    const membership = await getDefaultActiveMembership(pool, account.id);
 
-    const selectedTenantId = membership?.tenant_id ?? null;
-    if (selectedTenantId) {
-      await pool.query(`UPDATE public.accounts SET tenant_id = $2 WHERE id = $1`, [account.id, selectedTenantId]);
+    const selectedTenantId = membership?.workspace_id ?? null;
+    if (!selectedTenantId || !membership?.role) {
+      send(res, 403, { message: "Нямаш активно workspace membership." });
+      return;
     }
+
+    await pool.query(`UPDATE public.accounts SET tenant_id = $2 WHERE id = $1`, [account.id, selectedTenantId]);
 
     const token = signAuthToken(account.id, selectedTenantId);
     send(res, 200, {
@@ -559,7 +574,7 @@ const server = createServer(async (req, res) => {
         accountId: account.id,
         tenantId: selectedTenantId,
         workspaceId: "workspace-main",
-        role: membership ? membership.role[0] + membership.role.slice(1).toLowerCase() : null,
+        role: membership.role[0] + membership.role.slice(1).toLowerCase(),
         teamIds: [],
       },
     });
@@ -580,19 +595,45 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    const memberships = (
+    let memberships = (
       await pool.query(
         `SELECT wm.workspace_id, wm.role,
-                CASE WHEN wm.active THEN 'ACTIVE' ELSE 'REMOVED' END AS status,
+                'ACTIVE' AS status,
                 wm.created_at,
                 t.schema_name AS workspace_name
          FROM public.workspace_memberships wm
-         JOIN public.tenants t ON t.tenant_id = wm.workspace_id
+         LEFT JOIN public.tenants t ON t.tenant_id = wm.workspace_id
          WHERE wm.account_id = $1
-         ORDER BY wm.created_at DESC`,
+           AND wm.active = true
+           AND wm.workspace_id IS NOT NULL
+         ORDER BY CASE wm.role WHEN 'OWNER' THEN 0 ELSE 1 END, wm.created_at ASC`,
         [claims.accountId]
       )
     ).rows;
+
+    if (memberships.length === 0) {
+      const fallbackMemberships = (
+        await pool.query(
+          `SELECT workspace_id, role, active, created_at
+           FROM public.workspace_memberships
+           WHERE account_id = $1
+             AND active = true
+             AND workspace_id IS NOT NULL
+           ORDER BY CASE role WHEN 'OWNER' THEN 0 ELSE 1 END, created_at ASC`,
+          [claims.accountId]
+        )
+      ).rows;
+      if (fallbackMemberships.length > 0) {
+        console.error(`[Teamio] /api/me inconsistency: account ${claims.accountId} has active memberships but primary query returned empty.`);
+        memberships = fallbackMemberships.map((row) => ({
+          workspace_id: row.workspace_id,
+          role: row.role,
+          status: 'ACTIVE',
+          created_at: row.created_at,
+          workspace_name: null,
+        }));
+      }
+    }
 
     const pendingInvites = (
       await pool.query(
@@ -611,7 +652,7 @@ const server = createServer(async (req, res) => {
         email: account.email,
         displayName: account.display_name,
         publicId: account.public_id,
-        tenantId: account.tenant_id,
+        tenantId: memberships[0]?.workspace_id ?? account.tenant_id,
         createdAt: account.created_at,
       },
       memberships,
