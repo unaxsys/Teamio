@@ -42,10 +42,27 @@ const DATABASE_URL = (process.env.DATABASE_URL || "").trim();
 const JWT_SECRET = (process.env.JWT_SECRET || "teamio-dev-secret").trim();
 const WEB_DIR = path.join(__dirname, "../web");
 
-const pool = DATABASE_URL ? new Pool({ connectionString: DATABASE_URL }) : null;
+const buildConnStringFromParts = () => {
+  const host = (process.env.DB_HOST || "").trim();
+  const port = (process.env.DB_PORT || "5432").trim();
+  const name = (process.env.DB_NAME || "").trim();
+  const user = (process.env.DB_USER || "").trim();
+  const pass = (process.env.DB_PASS || "").trim();
+
+  if (!host || !name || !user) return "";
+  // encode password safely (handles * # ! etc.)
+  const encUser = encodeURIComponent(user);
+  const encPass = encodeURIComponent(pass);
+  return `postgresql://${encUser}:${encPass}@${host}:${port}/${name}`;
+};
+
+const EFFECTIVE_DB_URL = DATABASE_URL || buildConnStringFromParts();
+
+const pool = EFFECTIVE_DB_URL ? new Pool({ connectionString: EFFECTIVE_DB_URL }) : null;
 let dbReady = Boolean(pool);
 
-const dbUnavailableMessage = "Базата не е конфигурирана или е недостъпна. Провери DATABASE_URL.";
+const dbUnavailableMessage =
+  "Базата не е конфигурирана или е недостъпна. Провери DATABASE_URL или DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASS.";
 const ensureDb = (res) => {
   if (pool && dbReady) return true;
   send(res, 503, { message: dbUnavailableMessage });
