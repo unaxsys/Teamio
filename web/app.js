@@ -12,6 +12,7 @@ const verificationHelp = document.getElementById("verification-help");
 const authToggleButtons = document.querySelectorAll(".auth-toggle__button");
 const profileName = document.getElementById("profile-name");
 const profileAvatar = document.getElementById("profile-avatar");
+const profilePublicId = document.getElementById("profile-public-id");
 const logoutButton = document.getElementById("logout");
 const forgotPasswordButton = document.getElementById("forgot-password");
 const resetModal = document.getElementById("reset-modal");
@@ -55,6 +56,7 @@ const inviteShareTelegramLink = document.getElementById("invite-share-telegram")
 const acceptedMembersList = document.getElementById("accepted-members-list");
 const membersInvitesBadge = document.getElementById("members-invites-badge");
 const pendingInvitesCount = document.getElementById("pending-invites-count");
+const incomingInvitesCount = document.getElementById("incoming-invites-count");
 const memberTeamIdsSelect = document.getElementById("member-team-ids");
 const taskTeamIdsSelect = document.getElementById("task-team-ids");
 const boardTeamFilter = document.getElementById("board-team-filter");
@@ -815,8 +817,10 @@ const apiRequest = async (path, options = {}) => {
   const base = loadApiBase();
   const sameOriginBase = window.location.origin;
   const fetchJson = async (apiBase) => {
+    const token = loadAuthToken();
+    const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
     const response = await fetch(`${apiBase}${path}`, {
-      headers: { "Content-Type": "application/json", ...(options.headers ?? {}) },
+      headers: { "Content-Type": "application/json", ...authHeaders, ...(options.headers ?? {}) },
       ...options,
     });
 
@@ -1023,7 +1027,7 @@ const syncInvitesFromApi = async ({ force = false } = {}) => {
 
   try {
     if (myInvitesParams.toString()) {
-      const myInvitesResult = await apiRequest(`/api/invites/inbox?${myInvitesParams.toString()}`);
+      const myInvitesResult = await apiRequest(`/api/me/invites`);
       if (myInvitesResult?.ok && Array.isArray(myInvitesResult.data?.invites)) {
         incomingInvites = myInvitesResult.data.invites
           .filter((invite) => invite?.id)
@@ -1216,13 +1220,25 @@ const loadCurrentUser = () => {
   return stored ? JSON.parse(stored) : null;
 };
 
+const setAuthToken = (token) => {
+  if (token) {
+    localStorage.setItem("teamio-auth-token", token);
+    return;
+  }
+  localStorage.removeItem("teamio-auth-token");
+};
+
+const loadAuthToken = () => localStorage.getItem("teamio-auth-token") ?? "";
+
 const updateProfile = (user) => {
   if (!user) {
     profileName.textContent = "Гост";
     profileAvatar.textContent = "ТИ";
+    if (profilePublicId) profilePublicId.textContent = "ID: -";
     return;
   }
   profileName.textContent = user.name;
+  if (profilePublicId) profilePublicId.textContent = `ID: ${user.publicId || "-"}`;
   profileAvatar.textContent = user.name
     .split(" ")
     .map((part) => part[0])
@@ -1275,6 +1291,7 @@ const handleLogin = async (email, password) => {
     if (apiResult.data.account) {
       upsertAccountFromServer(apiResult.data.account);
     }
+    setAuthToken(apiResult.data.token ?? "");
     setCurrentUser(apiResult.data.user);
     setAuthMessage("");
     setVerificationHelp();
@@ -1956,6 +1973,10 @@ const renderInvites = () => {
   const invites = loadInvites().filter((invite) => invite.accountId && invite.accountId === currentAccount?.id);
   inviteList.innerHTML = "";
 
+  if (incomingInvitesCount) {
+    incomingInvitesCount.textContent = String(invites.filter((invite) => !invite.acceptedAt && !invite.declinedAt && !invite.revokedAt).length);
+  }
+
   if (invites.length === 0) {
     const empty = document.createElement("div");
     empty.className = "panel-list__item";
@@ -2123,6 +2144,10 @@ const renderMyInvites = () => {
   });
   myInviteList.innerHTML = "";
 
+  if (incomingInvitesCount) {
+    incomingInvitesCount.textContent = String(invites.filter((invite) => !invite.acceptedAt && !invite.declinedAt && !invite.revokedAt).length);
+  }
+
   if (invites.length === 0) {
     const empty = document.createElement("div");
     empty.className = "panel-list__item";
@@ -2155,10 +2180,7 @@ const renderMyInvites = () => {
       acceptButton.className = "primary";
       acceptButton.textContent = "Приеми";
       acceptButton.addEventListener("click", async () => {
-        const apiResult = await apiRequest("/api/invites/respond", {
-          method: "POST",
-          body: JSON.stringify({ inviteId: invite.id, action: "accept", userId: currentUser.id, email: currentUser.email }),
-        });
+        const apiResult = await apiRequest(`/api/invites/${invite.id}/accept`, { method: "POST" });
 
         if (apiResult?.ok) {
           await syncInvitesFromApi({ force: true });
@@ -2191,10 +2213,7 @@ const renderMyInvites = () => {
       declineButton.className = "ghost";
       declineButton.textContent = "Откажи";
       declineButton.addEventListener("click", async () => {
-        const apiResult = await apiRequest("/api/invites/respond", {
-          method: "POST",
-          body: JSON.stringify({ inviteId: invite.id, action: "decline", userId: currentUser.id, email: currentUser.email }),
-        });
+        const apiResult = await apiRequest(`/api/invites/${invite.id}/decline`, { method: "POST" });
 
         if (apiResult?.ok) {
           await syncInvitesFromApi({ force: true });
@@ -3159,6 +3178,7 @@ companyProfileForm?.addEventListener("submit", async (event) => {
 
 logoutButton.addEventListener("click", () => {
   stopInvitesPolling();
+  setAuthToken("");
   persistAndSync("teamio-current-user", null);
   showAuth();
 });
@@ -3452,9 +3472,10 @@ inviteForm?.addEventListener("submit", async (event) => {
     return;
   }
   const formData = new FormData(inviteForm);
-  const email = normalizeEmail(formData.get("email")?.toString() ?? "");
-  const invitedUserId = normalizeText(formData.get("invitedUserId")?.toString() ?? "");
-  const inviteTargetLabel = invitedUserId || email;
+  const inviteTarget = normalizeText(formData.get("inviteTarget")?.toString() ?? "");
+  const email = inviteTarget.includes("@") ? normalizeEmail(inviteTarget) : "";
+  const invitedUserId = normalizeText(formData.get("invitedUserId")?.toString() ?? "") || (!inviteTarget.includes("@") ? inviteTarget : "");
+  const inviteTargetLabel = invitedUserId || email || inviteTarget;
   const role = normalizeRole(formData.get("role")?.toString() ?? "Member");
   if (!canInviteRole(role)) {
     setAuthMessage("Можеш да каниш само с роля по-ниска от твоята.");
@@ -3466,7 +3487,7 @@ inviteForm?.addEventListener("submit", async (event) => {
   const validWorkspaceIds = new Set((account?.workspaces ?? []).map((entry) => entry.id));
   const workspaceId = selectedWorkspaceId && validWorkspaceIds.has(selectedWorkspaceId) ? selectedWorkspaceId : "";
   const currentBoard = loadBoards().find((board) => board.id === getCurrentBoardId()) ?? null;
-  if (!account || (!email && !invitedUserId)) {
+  if (!account || !inviteTarget) {
     return;
   }
 
@@ -3485,17 +3506,11 @@ inviteForm?.addEventListener("submit", async (event) => {
   };
 
   const payload = {
-    accountId: account.id,
-    invitedByUserId: loadCurrentUser()?.id ?? null,
-    ...(email ? { email } : {}),
-    ...(invitedUserId ? { invitedUserId } : {}),
+    target: invitedUserId || email || inviteTarget,
     role,
-    ...(workspaceId ? { workspaceId } : {}),
-    boardId: currentBoard?.id ?? null,
-    boardName: currentBoard?.name ?? null,
   };
 
-  const apiResult = await apiRequest("/api/invites", {
+  const apiResult = await apiRequest(`/api/tenants/${account.id}/invites`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
