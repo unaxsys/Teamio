@@ -54,6 +54,8 @@ const inviteShareWhatsappLink = document.getElementById("invite-share-whatsapp")
 const inviteShareFacebookLink = document.getElementById("invite-share-facebook");
 const inviteShareTelegramLink = document.getElementById("invite-share-telegram");
 const acceptedMembersList = document.getElementById("accepted-members-list");
+const noWorkspaceAccess = document.getElementById("no-workspace-access");
+const createWorkspaceButton = document.getElementById("create-workspace-button");
 const membersInvitesBadge = document.getElementById("members-invites-badge");
 const pendingInvitesCount = document.getElementById("pending-invites-count");
 const incomingInvitesCount = document.getElementById("incoming-invites-count");
@@ -1295,6 +1297,9 @@ const handleLogin = async (email, password) => {
     setCurrentUser(apiResult.data.user);
     setAuthMessage("");
     setVerificationHelp();
+    if (!apiResult.data.user?.tenantId || !apiResult.data.user?.role) {
+      setAuthMessage("Нямаш достъп/нямаш workspace.");
+    }
     await showApp(apiResult.data.user);
     return;
   }
@@ -1995,6 +2000,13 @@ const renderInvites = () => {
 };
 
 const renderMembersInvitesSummary = async () => {
+  const hasWorkspaceAccess = Boolean(loadCurrentUser()?.tenantId && loadCurrentUser()?.role);
+  if (noWorkspaceAccess) noWorkspaceAccess.hidden = hasWorkspaceAccess;
+  if (!hasWorkspaceAccess) {
+    if (acceptedMembersList) acceptedMembersList.innerHTML = "";
+    if (inviteList) inviteList.innerHTML = "";
+    return;
+  }
   if (!acceptedMembersList) {
     return;
   }
@@ -3465,6 +3477,10 @@ renameBoardButton?.addEventListener("click", renameCurrentBoard);
 
 deleteBoardButton?.addEventListener("click", deleteCurrentBoard);
 
+createWorkspaceButton?.addEventListener("click", async () => {
+  setAuthMessage("Създай workspace чрез нова регистрация (или администратор да те покани).");
+});
+
 inviteForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!hasManagementAccess()) {
@@ -3482,11 +3498,6 @@ inviteForm?.addEventListener("submit", async (event) => {
     return;
   }
   const account = getCurrentAccount();
-  const workspaceSelect = inviteForm?.querySelector('select[name="workspaceId"]') ?? null;
-  const selectedWorkspaceId = workspaceSelect?.value?.trim() ?? "";
-  const validWorkspaceIds = new Set((account?.workspaces ?? []).map((entry) => entry.id));
-  const workspaceId = selectedWorkspaceId && validWorkspaceIds.has(selectedWorkspaceId) ? selectedWorkspaceId : "";
-  const currentBoard = loadBoards().find((board) => board.id === getCurrentBoardId()) ?? null;
   if (!account || !inviteTarget) {
     return;
   }
@@ -3505,12 +3516,19 @@ inviteForm?.addEventListener("submit", async (event) => {
     revokedAt: null,
   };
 
+  const workspaceId = normalizeText(loadCurrentUser()?.tenantId ?? "");
   const payload = {
-    target: invitedUserId || email || inviteTarget,
     role,
+    email: email || undefined,
+    public_id: invitedUserId || undefined,
   };
 
-  const apiResult = await apiRequest(`/api/tenants/${account.id}/invites`, {
+  if (!workspaceId) {
+    setAuthMessage("Нямаш активен workspace.");
+    return;
+  }
+
+  const apiResult = await apiRequest(`/api/workspaces/${workspaceId}/invites`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
