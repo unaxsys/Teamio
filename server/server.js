@@ -20,7 +20,8 @@ const loadEnvFile = (envFilePath) => {
       const separatorIndex = trimmed.indexOf("=");
       if (separatorIndex <= 0) continue;
       const key = trimmed.slice(0, separatorIndex).trim();
-      if (!key || process.env[key] !== undefined) continue;
+      const existing = String(process.env[key] ?? "").trim();
+      if (!key || (existing && existing !== "undefined" && existing !== "null")) continue;
       let value = trimmed.slice(separatorIndex + 1).trim();
       if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
         value = value.slice(1, -1);
