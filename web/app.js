@@ -1957,7 +1957,8 @@ const getInviteStatusLabel = (invite) => {
   if (invite.revokedAt) {
     return "Отменена";
   }
-  if (invite.expiresAt < Date.now()) {
+  const expiresAtTs = invite.expiresAt ? new Date(invite.expiresAt).getTime() : null;
+  if (Number.isFinite(expiresAtTs) && expiresAtTs <= Date.now()) {
     return "Изтекла";
   }
   return "Активна";
@@ -2182,7 +2183,8 @@ const renderMyInvites = () => {
     const boardLabel = invite.boardName || (invite.boardId ? "Избран борд" : "");
     item.innerHTML = `<div><strong>${accountName}</strong><div class="panel-list__meta">Покана от: ${invitedByName} · До: ${invite.email} · Пространство: ${workspaceLabel}${boardLabel ? ` · Борд: ${boardLabel}` : ""} · Роля: ${invite.role} · ${status}</div></div>`;
 
-    const canRespond = !invite.acceptedAt && !invite.declinedAt && !invite.revokedAt && invite.expiresAt > Date.now();
+    const expiresAtTs = invite.expiresAt ? new Date(invite.expiresAt).getTime() : null;
+    const canRespond = !invite.acceptedAt && !invite.declinedAt && !invite.revokedAt && (!Number.isFinite(expiresAtTs) || expiresAtTs > Date.now());
     if (canRespond) {
       const actions = document.createElement("div");
       actions.className = "invite-actions";
@@ -3489,9 +3491,13 @@ inviteForm?.addEventListener("submit", async (event) => {
   }
   const formData = new FormData(inviteForm);
   const inviteTarget = normalizeText(formData.get("inviteTarget")?.toString() ?? "");
-  const email = inviteTarget.includes("@") ? normalizeEmail(inviteTarget) : "";
-  const invitedUserId = normalizeText(formData.get("invitedUserId")?.toString() ?? "") || (!inviteTarget.includes("@") ? inviteTarget : "");
-  const inviteTargetLabel = invitedUserId || email || inviteTarget;
+  const explicitUserId = normalizeText(formData.get("invitedUserId")?.toString() ?? "");
+  const targetLooksLikeEmail = inviteTarget.includes("@");
+  const inviteeEmail = targetLooksLikeEmail ? normalizeEmail(inviteTarget) : "";
+  const inviteeUserId = (explicitUserId || (!targetLooksLikeEmail ? inviteTarget : "")).toUpperCase();
+  const hasInviteeEmail = Boolean(inviteeEmail);
+  const hasInviteeUserId = Boolean(inviteeUserId);
+  const inviteTargetLabel = inviteeUserId || inviteeEmail || inviteTarget;
   const role = normalizeRole(formData.get("role")?.toString() ?? "Member");
   if (!canInviteRole(role)) {
     setAuthMessage("Можеш да каниш само с роля по-ниска от твоята.");
@@ -3501,13 +3507,17 @@ inviteForm?.addEventListener("submit", async (event) => {
   if (!account || !inviteTarget) {
     return;
   }
+  if (hasInviteeEmail === hasInviteeUserId) {
+    setAuthMessage("Попълни точно едно поле: имейл или потребителско ID.");
+    return;
+  }
 
   const localToken = generateToken();
   let invite = {
     id: `invite-${Date.now()}`,
     accountId: account.id,
     invitedByUserId: loadCurrentUser()?.id ?? null,
-    email: email || "",
+    email: inviteeEmail || "",
     role,
     token: localToken,
     expiresAt: Date.now() + 48 * 60 * 60 * 1000,
@@ -3519,8 +3529,11 @@ inviteForm?.addEventListener("submit", async (event) => {
   const workspaceId = normalizeText(loadCurrentUser()?.tenantId ?? "");
   const payload = {
     role,
-    email: email || undefined,
-    public_id: invitedUserId || undefined,
+    inviteeEmail: hasInviteeEmail ? inviteeEmail : undefined,
+    inviteeUserId: hasInviteeUserId ? inviteeUserId : undefined,
+    // backward-compatible payload for текущ backend/интеграции
+    email: hasInviteeEmail ? inviteeEmail : undefined,
+    public_id: hasInviteeUserId ? inviteeUserId : undefined,
   };
 
   if (!workspaceId) {
@@ -3549,7 +3562,8 @@ inviteForm?.addEventListener("submit", async (event) => {
 
   inviteForm.reset();
 
-  const inviteLink = `${window.location.origin}${window.location.pathname}?invite=${invite.token}`;
+  const inviteIdOrToken = invite.inviteId || invite.token || invite.id;
+  const inviteLink = invite.inviteLink || `${window.location.origin}${window.location.pathname}?invite=${inviteIdOrToken}`;
   if (inviteShareBox && inviteShareLink) {
     const isInternalInvite = invite.delivery === "internal";
     inviteShareBox.hidden = isInternalInvite;
@@ -3572,7 +3586,7 @@ inviteForm?.addEventListener("submit", async (event) => {
     type: "board_invite",
     accountId: account.id,
     boardId: getCurrentBoardId(),
-    email: email || invite.email,
+    email: inviteeEmail || invite.email,
     role,
     message: `Изпратена е покана към ${inviteTargetLabel || invite.email}`,
   });

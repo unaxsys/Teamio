@@ -170,6 +170,24 @@ const normalizeRole = (role = "") => {
 const generatePublicId = () => randomBytes(6).toString("base64url").replace(/[^a-zA-Z0-9]/g, "").slice(0, 10).toUpperCase();
 const generateInviteToken = () => randomBytes(24).toString("hex");
 
+const getAppBaseUrl = (req) => {
+  const configured = readEnv("APP_BASE_URL", "BASE_URL", "PUBLIC_BASE_URL", "WEB_BASE_URL");
+  if (configured) {
+    return configured.replace(/\/$/, "");
+  }
+  const host = normalizeText(req.headers.host || "");
+  if (!host) return "";
+  const forwardedProto = normalizeText(req.headers["x-forwarded-proto"] || "");
+  const protocol = forwardedProto || (host.startsWith("localhost") || host.startsWith("127.0.0.1") ? "http" : "http");
+  return `${protocol}://${host}`;
+};
+
+const buildInviteLink = (req, inviteId) => {
+  const baseUrl = getAppBaseUrl(req);
+  if (!baseUrl || !inviteId) return "";
+  return `${baseUrl}/?invite=${inviteId}`;
+};
+
 const buildTenantSchemaSlugFromEmail = (email = "") => {
   const normalizedEmail = normalizeEmail(email);
   const rawSlug = normalizedEmail
@@ -1040,11 +1058,18 @@ const server = createServer(async (req, res) => {
     const workspaceId = normalizeText(requestUrl.pathname.split("/")[3] ?? "");
     const body = await readBody(req);
     const role = normalizeRole(body.role);
-    const inviteEmail = normalizeEmail(body.email);
-    const publicId = normalizeText(body.public_id || body.publicId).toUpperCase();
+    const inviteeEmail = normalizeEmail(body.inviteeEmail ?? body.email);
+    const inviteeUserId = normalizeText(body.inviteeUserId ?? body.public_id ?? body.publicId).toUpperCase();
 
-    if (!workspaceId || !INVITE_ROLES.includes(role) || (!inviteEmail && !publicId)) {
+    if (!workspaceId || !INVITE_ROLES.includes(role)) {
       send(res, 400, { message: "Невалидна покана." });
+      return;
+    }
+
+    const hasInviteeEmail = Boolean(inviteeEmail);
+    const hasInviteeUserId = Boolean(inviteeUserId);
+    if (hasInviteeEmail === hasInviteeUserId) {
+      send(res, 400, { message: "Подай точно едно поле: inviteeEmail или inviteeUserId." });
       return;
     }
 
@@ -1059,39 +1084,84 @@ const server = createServer(async (req, res) => {
       }
 
       let inviteeAccountId = null;
-      let inviteeEmailValue = inviteEmail || null;
-      if (publicId) {
-        const account = (await client.query(`SELECT id, email FROM public.accounts WHERE public_id = upper($1)`, [publicId])).rows[0];
+      let inviteeEmailValue = null;
+
+      if (hasInviteeUserId) {
+        const account = (await client.query(`SELECT id, email, public_id FROM public.accounts WHERE public_id = upper($1)`, [inviteeUserId])).rows[0];
         if (!account) {
           await client.query("ROLLBACK");
-          send(res, 404, { message: "Потребител с този public_id не съществува." });
+          send(res, 404, { message: "User not found" });
           return;
         }
         inviteeAccountId = account.id;
         inviteeEmailValue = account.email;
-      } else if (inviteEmail) {
-        const account = (await client.query(`SELECT id, email FROM public.accounts WHERE lower(email) = lower($1)`, [inviteEmail])).rows[0];
-        if (account) {
-          inviteeAccountId = account.id;
-          inviteeEmailValue = account.email;
+      } else {
+        const account = (await client.query(`SELECT id, email, public_id FROM public.accounts WHERE lower(email) = lower($1)`, [inviteeEmail])).rows[0];
+        if (!account) {
+          await client.query("ROLLBACK");
+          send(res, 404, { message: "User not found" });
+          return;
         }
+        inviteeAccountId = account.id;
+        inviteeEmailValue = account.email;
+      }
+
+      if (inviteeAccountId === claims.accountId) {
+        await client.query("ROLLBACK");
+        send(res, 400, { message: "Не можеш да изпратиш покана към себе си." });
+        return;
+      }
+
+      const memberCheck = await getMembership(client, workspaceId, inviteeAccountId);
+      if (memberCheck?.active) {
+        await client.query("ROLLBACK");
+        send(res, 409, { message: "Потребителят вече е член." });
+        return;
+      }
+
+      const pendingCheck = await client.query(
+        `SELECT id FROM public.workspace_invites
+         WHERE workspace_id = $1 AND invitee_account_id = $2 AND status = 'pending'
+         LIMIT 1`,
+        [workspaceId, inviteeAccountId]
+      );
+      if (pendingCheck.rowCount > 0) {
+        await client.query("ROLLBACK");
+        send(res, 409, { message: "Invite already sent" });
+        return;
       }
 
       const invite = (
         await client.query(
           `INSERT INTO public.workspace_invites (workspace_id, invited_by_account_id, invitee_account_id, invitee_email, role)
            VALUES ($1, $2, $3, $4, $5)
-           RETURNING *`,
+           RETURNING id, workspace_id, invited_by_account_id, invitee_account_id, invitee_email, role, status, created_at, responded_at`,
           [workspaceId, claims.accountId, inviteeAccountId, inviteeEmailValue, role]
         )
       ).rows[0];
 
+      const normalizedInvite = {
+        ...invite,
+        token: invite.id,
+        inviteId: invite.id,
+        inviteeUserId: invite.invitee_account_id,
+        createdAt: invite.created_at,
+        inviteLink: buildInviteLink(req, invite.id),
+      };
+
       await client.query("COMMIT");
-      send(res, 201, { invite });
+      send(res, 201, {
+        invite: normalizedInvite,
+        inviteId: invite.id,
+        inviteLink: normalizedInvite.inviteLink,
+        status: String(invite.status || "").toUpperCase(),
+        role: invite.role,
+        inviteeUserId: invite.invitee_account_id,
+      });
     } catch (error) {
       try { await client.query("ROLLBACK"); } catch {}
       if (error?.code === "23505") {
-        send(res, 409, { message: "Вече има активна покана за този потребител." });
+        send(res, 409, { message: "Invite already sent" });
         return;
       }
       console.error(error);
@@ -1255,7 +1325,22 @@ const server = createServer(async (req, res) => {
          WHERE ti.invited_account_id = $1
            AND ti.status = 'PENDING'
            AND ti.expires_at > now()
-         ORDER BY ti.created_at DESC`,
+
+         UNION ALL
+
+         SELECT wi.id, wi.role, wi.created_at AS "createdAt", NULL::timestamptz AS "expiresAt", wi.id::text AS token, wi.workspace_id AS "tenantId",
+                t.schema_name AS "workspaceName",
+                inviter.display_name AS "invitedByName",
+                inviter.email AS "invitedByEmail",
+                wi.invitee_email AS email,
+                'incoming'::text AS __scope
+         FROM public.workspace_invites wi
+         LEFT JOIN public.tenants t ON t.tenant_id = wi.workspace_id
+         LEFT JOIN public.accounts inviter ON inviter.id = wi.invited_by_account_id
+         WHERE wi.invitee_account_id = $1
+           AND wi.status = 'pending'
+
+         ORDER BY "createdAt" DESC`,
         [claims.accountId]
       )
     ).rows;
@@ -1281,7 +1366,21 @@ const server = createServer(async (req, res) => {
          WHERE ti.invited_account_id = $1
            AND ti.status = 'PENDING'
            AND ti.expires_at > now()
-         ORDER BY ti.created_at DESC`,
+
+         UNION ALL
+
+         SELECT wi.id, wi.role, wi.created_at AS "createdAt", NULL::timestamptz AS "expiresAt", wi.id::text AS token, wi.workspace_id AS "tenantId",
+                t.schema_name AS "workspaceName",
+                inviter.display_name AS "invitedByName",
+                inviter.email AS "invitedByEmail",
+                wi.invitee_email AS email
+         FROM public.workspace_invites wi
+         LEFT JOIN public.tenants t ON t.tenant_id = wi.workspace_id
+         LEFT JOIN public.accounts inviter ON inviter.id = wi.invited_by_account_id
+         WHERE wi.invitee_account_id = $1
+           AND wi.status = 'pending'
+
+         ORDER BY "createdAt" DESC`,
         [claims.accountId]
       )
     ).rows;
@@ -1387,24 +1486,59 @@ const server = createServer(async (req, res) => {
     if (!claims) return;
 
     const inviteId = normalizeText(requestUrl.pathname.split("/")[3] ?? "");
-    const result = await pool.query(
-      `UPDATE public.tenant_invites
-       SET status = 'DECLINED', responded_at = now()
-       WHERE id = $1 AND invited_account_id = $2 AND status = 'PENDING'
-       RETURNING id`,
-      [inviteId, claims.accountId]
-    );
-    if (result.rowCount === 0) {
-      send(res, 404, { message: "Поканата не е намерена." });
-      return;
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      let invite = (await client.query(`SELECT * FROM public.tenant_invites WHERE id = $1 FOR UPDATE`, [inviteId])).rows[0];
+      let inviteSource = "tenant";
+
+      if (!invite) {
+        const workspaceInvite = (await client.query(`SELECT * FROM public.workspace_invites WHERE id = $1 FOR UPDATE`, [inviteId])).rows[0];
+        if (workspaceInvite) {
+          invite = {
+            ...workspaceInvite,
+            invited_account_id: workspaceInvite.invitee_account_id,
+            status: String(workspaceInvite.status || "").toUpperCase(),
+          };
+          inviteSource = "workspace";
+        }
+      }
+
+      if (!invite || invite.invited_account_id !== claims.accountId) {
+        await client.query("ROLLBACK");
+        send(res, 404, { message: "Поканата не е намерена." });
+        return;
+      }
+      if (invite.status !== "PENDING") {
+        await client.query("ROLLBACK");
+        send(res, 409, { message: "Поканата вече е обработена." });
+        return;
+      }
+
+      if (inviteSource === "tenant") {
+        await client.query(
+          `UPDATE public.tenant_invites
+           SET status = 'DECLINED', responded_at = now()
+           WHERE id = $1`,
+          [inviteId]
+        );
+      }
+      await client.query(
+        `UPDATE public.workspace_invites
+         SET status = 'declined', responded_at = now()
+         WHERE id = $1`,
+        [inviteId]
+      );
+
+      await client.query("COMMIT");
+      send(res, 200, { ok: true });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error(error);
+      send(res, 500, { message: "Грешка при отказ на покана." });
+    } finally {
+      client.release();
     }
-    await pool.query(
-      `UPDATE public.workspace_invites
-       SET status = 'declined', responded_at = now()
-       WHERE id = $1 AND invitee_account_id = $2 AND status = 'pending'`,
-      [inviteId, claims.accountId]
-    );
-    send(res, 200, { ok: true });
     return;
   }
 
@@ -1529,7 +1663,16 @@ const server = createServer(async (req, res) => {
            FROM public.tenant_invites ti
            LEFT JOIN public.accounts inviter ON inviter.id = ti.invited_by_account_id
            WHERE ti.tenant_id = $1 AND ti.status = 'PENDING'
-           ORDER BY ti.created_at DESC`,
+
+           UNION ALL
+
+           SELECT wi.id, wi.invitee_email AS email, wi.role, wi.created_at AS "createdAt", NULL::timestamptz AS "expiresAt",
+                  inviter.display_name AS "invitedByName"
+           FROM public.workspace_invites wi
+           LEFT JOIN public.accounts inviter ON inviter.id = wi.invited_by_account_id
+           WHERE wi.workspace_id = $1 AND wi.status = 'pending'
+
+           ORDER BY "createdAt" DESC`,
           [claims.tenantId]
         )
       ).rows;
