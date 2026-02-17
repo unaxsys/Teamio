@@ -35,6 +35,7 @@ const loadEnvFile = (envFilePath) => {
 };
 
 loadEnvFile(path.join(__dirname, ".env"));
+loadEnvFile(path.join(__dirname, "../.env"));
 loadEnvFile(path.join(process.cwd(), ".env"));
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -264,15 +265,32 @@ const initDb = async () => {
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       tenant_id UUID NOT NULL REFERENCES public.tenants(tenant_id) ON DELETE CASCADE,
       account_id UUID NOT NULL REFERENCES public.accounts(id) ON DELETE CASCADE,
-      role TEXT NOT NULL CHECK (role IN ('OWNER','ADMIN','MANAGER','MEMBER','VIEWER')),
+      role TEXT NOT NULL DEFAULT 'OWNER' CHECK (role IN ('OWNER','ADMIN','MANAGER','MEMBER','VIEWER')),
       status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','REMOVED')),
       joined_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE (tenant_id, account_id)
     );
 
-    CREATE UNIQUE INDEX IF NOT EXISTS uniq_tenant_owner_active
-    ON public.tenant_members(tenant_id)
-    WHERE role = 'OWNER' AND status = 'ACTIVE';
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'tenant_members'
+          AND column_name = 'role'
+      ) AND EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'tenant_members'
+          AND column_name = 'status'
+      ) THEN
+        EXECUTE 'ALTER TABLE public.tenant_members ALTER COLUMN role SET DEFAULT ''OWNER''';
+        EXECUTE 'CREATE UNIQUE INDEX IF NOT EXISTS uniq_tenant_owner_active ON public.tenant_members(tenant_id) WHERE role = ''OWNER'' AND status = ''ACTIVE''';
+      END IF;
+    END
+    $$;
 
     CREATE TABLE IF NOT EXISTS public.tenant_invites (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -304,6 +322,23 @@ const initDb = async () => {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (workspace_id, account_id)
     );
+
+    CREATE OR REPLACE FUNCTION public.sync_workspace_membership_from_tenant_member()
+    RETURNS trigger AS $$
+    BEGIN
+      INSERT INTO public.workspace_memberships (workspace_id, account_id, role, active)
+      VALUES (NEW.tenant_id, NEW.account_id, 'OWNER', true)
+      ON CONFLICT (workspace_id, account_id)
+      DO UPDATE SET active = true;
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    DROP TRIGGER IF EXISTS trg_sync_workspace_membership_from_tenant_member ON public.tenant_members;
+    CREATE TRIGGER trg_sync_workspace_membership_from_tenant_member
+    AFTER INSERT ON public.tenant_members
+    FOR EACH ROW
+    EXECUTE FUNCTION public.sync_workspace_membership_from_tenant_member();
 
     CREATE TABLE IF NOT EXISTS public.workspace_invites (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -416,67 +451,73 @@ const createTenantSchema = async (client, tenantId, schemaName, owner) => {
   );
 };
 
-const ensureTenantForAccount = async (client, accountId, email) => {
-  const account = (
-    await client.query(
-      `SELECT id, email, display_name
-       FROM public.accounts
-       WHERE id = $1
-       FOR UPDATE`,
-      [accountId]
-    )
-  ).rows[0];
+const ensureTenantForAccount = async ({ pool, accountId, email }) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
 
-  if (!account) {
-    throw new Error(`Account not found: ${accountId}`);
-  }
-
-  const existingTenant = (
-    await client.query(
-      `SELECT tm.tenant_id
-       FROM public.tenant_members tm
-       WHERE tm.account_id = $1
+    const existing = await client.query(
+      `SELECT tenant_id
+       FROM public.tenant_members
+       WHERE account_id = $1
        LIMIT 1`,
       [accountId]
-    )
-  ).rows[0];
+    );
 
-  if (existingTenant?.tenant_id) {
-    return existingTenant.tenant_id;
-  }
-
-  const baseSchemaName = buildTenantSchemaSlugFromEmail(email || account.email);
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const tenantId = randomUUID();
-    const suffix = attempt === 0 ? "" : `-${attempt + 1}`;
-    const schemaName = `${baseSchemaName}${suffix}`;
-    const savepointName = `sp_ensure_tenant_${attempt}`;
-    await client.query(`SAVEPOINT ${savepointName}`);
-    try {
-      await createTenantSchema(client, tenantId, schemaName, { name: account.display_name, email: account.email });
-      await client.query(
-        `INSERT INTO public.tenant_members (tenant_id, account_id, role, status)
-         VALUES ($1, $2, 'OWNER', 'ACTIVE')
-         ON CONFLICT (tenant_id, account_id) DO NOTHING`,
-        [tenantId, accountId]
-      );
-      await client.query(`RELEASE SAVEPOINT ${savepointName}`);
-      return tenantId;
-    } catch (error) {
-      await client.query(`ROLLBACK TO SAVEPOINT ${savepointName}`);
-      await client.query(`RELEASE SAVEPOINT ${savepointName}`);
-      if (error?.code === "23505" && error?.constraint === "tenants_schema_name_key") {
-        continue;
-      }
-      throw error;
+    if (existing.rowCount > 0) {
+      await client.query("COMMIT");
+      return existing.rows[0].tenant_id;
     }
-  }
 
-  throw new Error(`Failed to allocate tenant schema_name for account: ${accountId}`);
+    let ensuredEmail = normalizeEmail(email);
+    if (!ensuredEmail) {
+      const accountRes = await client.query(`SELECT email FROM public.accounts WHERE id = $1`, [accountId]);
+      ensuredEmail = normalizeEmail(accountRes.rows[0]?.email);
+    }
+
+    const base = buildTenantSchemaSlugFromEmail(ensuredEmail);
+    let tenantId = null;
+
+    for (let i = 0; i < 5; i += 1) {
+      const schemaName = i === 0 ? base : `${base}_${i + 1}`;
+      try {
+        const insTenant = await client.query(
+          `INSERT INTO public.tenants (tenant_id, schema_name)
+           VALUES (gen_random_uuid(), $1)
+           RETURNING tenant_id`,
+          [schemaName]
+        );
+        tenantId = insTenant.rows[0].tenant_id;
+        break;
+      } catch (error) {
+        if (error?.code === "23505") continue;
+        throw error;
+      }
+    }
+
+    if (!tenantId) {
+      throw new Error("Failed to create tenant (schema_name conflicts)");
+    }
+
+    await client.query(
+      `INSERT INTO public.tenant_members (tenant_id, account_id)
+       VALUES ($1, $2)
+       ON CONFLICT DO NOTHING`,
+      [tenantId, accountId]
+    );
+
+    await client.query("COMMIT");
+    return tenantId;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 };
 
 const ensureTenantAndMembership = async (client, accountId, email) => {
-  const tenantId = await ensureTenantForAccount(client, accountId, email);
+  const tenantId = await ensureTenantForAccount({ pool, accountId, email });
   const membership = await getDefaultActiveMembership(client, accountId);
   const selectedTenantId = membership?.workspace_id ?? tenantId;
   const selectedRole = membership?.role ?? "OWNER";
@@ -639,10 +680,9 @@ const server = createServer(async (req, res) => {
         )
       ).rows[0];
       await client.query(
-        `INSERT INTO public.tenant_members (tenant_id, account_id, role, status)
-         VALUES ($1, $2, 'OWNER', 'ACTIVE')
-         ON CONFLICT (tenant_id, account_id)
-         DO UPDATE SET role = EXCLUDED.role, status = 'ACTIVE'`,
+        `INSERT INTO public.tenant_members (tenant_id, account_id)
+         VALUES ($1, $2)
+         ON CONFLICT DO NOTHING`,
         [tenantId, account.id]
       );
       await client.query("COMMIT");
@@ -674,22 +714,32 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    const client = await pool.connect();
-    let ensuredAccess;
+    let tenantId;
+    console.log(`ensureTenantForAccount start accountId=${account.id}`);
     try {
-      await client.query("BEGIN");
-      ensuredAccess = await ensureTenantAndMembership(client, account.id, account.email);
-      await client.query("COMMIT");
+      tenantId = await ensureTenantForAccount({ pool, accountId: account.id, email: account.email });
+      console.log(`ensureTenantForAccount result tenantId=${tenantId}`);
     } catch (error) {
-      try { await client.query("ROLLBACK"); } catch {}
-      console.error(error);
+      console.error("ensureTenantForAccount error", error);
       send(res, 500, { message: "Грешка при осигуряване на workspace достъп." });
       return;
-    } finally {
-      client.release();
     }
 
-    const token = signAuthToken(account.id, ensuredAccess.tenantId);
+    let ensuredRole = "OWNER";
+    const roleRes = await pool.query(
+      `SELECT role, active
+       FROM public.workspace_memberships
+       WHERE workspace_id = $1 AND account_id = $2
+       LIMIT 1`,
+      [tenantId, account.id]
+    );
+    if (roleRes.rowCount > 0 && roleRes.rows[0].active) {
+      ensuredRole = normalizeRole(roleRes.rows[0].role);
+    }
+
+    await pool.query(`UPDATE public.accounts SET tenant_id = $2 WHERE id = $1`, [account.id, tenantId]);
+
+    const token = signAuthToken(account.id, tenantId);
     send(res, 200, {
       token,
       user: {
@@ -698,9 +748,9 @@ const server = createServer(async (req, res) => {
         email: account.email,
         publicId: account.public_id,
         accountId: account.id,
-        tenantId: ensuredAccess.tenantId,
+        tenantId,
         workspaceId: "workspace-main",
-        role: ensuredAccess.role[0] + ensuredAccess.role.slice(1).toLowerCase(),
+        role: ensuredRole[0] + ensuredRole.slice(1).toLowerCase(),
         teamIds: [],
       },
     });
