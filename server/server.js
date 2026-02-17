@@ -136,6 +136,16 @@ const normalizeRole = (role = "") => {
 const generatePublicId = () => randomBytes(6).toString("base64url").replace(/[^a-zA-Z0-9]/g, "").slice(0, 10).toUpperCase();
 const generateInviteToken = () => randomBytes(24).toString("hex");
 
+const buildTenantSchemaSlugFromEmail = (email = "") => {
+  const normalizedEmail = normalizeEmail(email);
+  const rawSlug = normalizedEmail
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/_+/g, "_");
+  const base = rawSlug ? `u_${rawSlug}` : "u_account";
+  return base.slice(0, 50);
+};
+
 const createUniquePublicId = async (client) => {
   for (let i = 0; i < 12; i += 1) {
     const candidate = generatePublicId();
@@ -406,10 +416,10 @@ const createTenantSchema = async (client, tenantId, schemaName, owner) => {
   );
 };
 
-const ensureTenantAndMembership = async (client, accountId) => {
+const ensureTenantForAccount = async (client, accountId, email) => {
   const account = (
     await client.query(
-      `SELECT id, email, display_name, tenant_id
+      `SELECT id, email, display_name
        FROM public.accounts
        WHERE id = $1
        FOR UPDATE`,
@@ -421,63 +431,55 @@ const ensureTenantAndMembership = async (client, accountId) => {
     throw new Error(`Account not found: ${accountId}`);
   }
 
-  let tenantMember = (
+  const existingTenant = (
     await client.query(
-      `SELECT tm.tenant_id, tm.role
+      `SELECT tm.tenant_id
        FROM public.tenant_members tm
-       JOIN public.tenants t ON t.tenant_id = tm.tenant_id
-       WHERE tm.account_id = $1 AND tm.status = 'ACTIVE'
-       ORDER BY CASE tm.role WHEN 'OWNER' THEN 0 ELSE 1 END, tm.joined_at ASC
+       WHERE tm.account_id = $1
        LIMIT 1`,
       [accountId]
     )
   ).rows[0];
 
-  if (!tenantMember) {
-    let targetTenant = (
-      await client.query(
-        `SELECT wm.workspace_id AS tenant_id, wm.role
-         FROM public.workspace_memberships wm
-         JOIN public.tenants t ON t.tenant_id = wm.workspace_id
-         WHERE wm.account_id = $1 AND wm.active = true
-         ORDER BY CASE wm.role WHEN 'OWNER' THEN 0 ELSE 1 END, wm.created_at ASC
-         LIMIT 1`,
-        [accountId]
-      )
-    ).rows[0];
+  if (existingTenant?.tenant_id) {
+    return existingTenant.tenant_id;
+  }
 
-    if (!targetTenant && account.tenant_id) {
-      const tenantExists = await client.query(`SELECT 1 FROM public.tenants WHERE tenant_id = $1`, [account.tenant_id]);
-      if (tenantExists.rowCount > 0) {
-        targetTenant = { tenant_id: account.tenant_id, role: "OWNER" };
-      }
-    }
-
-    if (!targetTenant) {
-      const tenantId = (await client.query("SELECT gen_random_uuid() AS id")).rows[0].id;
-      const schemaName = tenantSchemaName(tenantId);
+  const baseSchemaName = buildTenantSchemaSlugFromEmail(email || account.email);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const tenantId = randomUUID();
+    const suffix = attempt === 0 ? "" : `-${attempt + 1}`;
+    const schemaName = `${baseSchemaName}${suffix}`;
+    const savepointName = `sp_ensure_tenant_${attempt}`;
+    await client.query(`SAVEPOINT ${savepointName}`);
+    try {
       await createTenantSchema(client, tenantId, schemaName, { name: account.display_name, email: account.email });
-      targetTenant = { tenant_id: tenantId, role: "OWNER" };
+      await client.query(
+        `INSERT INTO public.tenant_members (tenant_id, account_id, role, status)
+         VALUES ($1, $2, 'OWNER', 'ACTIVE')
+         ON CONFLICT (tenant_id, account_id) DO NOTHING`,
+        [tenantId, accountId]
+      );
+      await client.query(`RELEASE SAVEPOINT ${savepointName}`);
+      return tenantId;
+    } catch (error) {
+      await client.query(`ROLLBACK TO SAVEPOINT ${savepointName}`);
+      await client.query(`RELEASE SAVEPOINT ${savepointName}`);
+      if (error?.code === "23505" && error?.constraint === "tenants_schema_name_key") {
+        continue;
+      }
+      throw error;
     }
-
-    await client.query(
-      `INSERT INTO public.tenant_members (tenant_id, account_id, role, status)
-       VALUES ($1, $2, $3, 'ACTIVE')
-       ON CONFLICT (tenant_id, account_id)
-       DO UPDATE SET status = 'ACTIVE', role = EXCLUDED.role`,
-      [targetTenant.tenant_id, accountId, normalizeRole(targetTenant.role)]
-    );
-
-    tenantMember = { tenant_id: targetTenant.tenant_id, role: normalizeRole(targetTenant.role) };
   }
 
+  throw new Error(`Failed to allocate tenant schema_name for account: ${accountId}`);
+};
+
+const ensureTenantAndMembership = async (client, accountId, email) => {
+  const tenantId = await ensureTenantForAccount(client, accountId, email);
   const membership = await getDefaultActiveMembership(client, accountId);
-  const selectedTenantId = membership?.workspace_id ?? tenantMember.tenant_id;
-  const selectedRole = membership?.role ?? tenantMember.role;
-
-  if (!selectedTenantId || !selectedRole) {
-    throw new Error(`No active membership for account: ${accountId}`);
-  }
+  const selectedTenantId = membership?.workspace_id ?? tenantId;
+  const selectedRole = membership?.role ?? "OWNER";
 
   await client.query(`UPDATE public.accounts SET tenant_id = $2 WHERE id = $1`, [accountId, selectedTenantId]);
 
@@ -676,7 +678,7 @@ const server = createServer(async (req, res) => {
     let ensuredAccess;
     try {
       await client.query("BEGIN");
-      ensuredAccess = await ensureTenantAndMembership(client, account.id);
+      ensuredAccess = await ensureTenantAndMembership(client, account.id, account.email);
       await client.query("COMMIT");
     } catch (error) {
       try { await client.query("ROLLBACK"); } catch {}
@@ -712,7 +714,7 @@ const server = createServer(async (req, res) => {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
-      await ensureTenantAndMembership(client, claims.accountId);
+      const ensuredAccess = await ensureTenantAndMembership(client, claims.accountId);
 
       const accountRes = await client.query(
         `SELECT id, email, display_name, public_id, tenant_id, created_at FROM public.accounts WHERE id = $1`,
@@ -785,6 +787,8 @@ const server = createServer(async (req, res) => {
           displayName: account.display_name,
           publicId: account.public_id,
           tenantId: memberships[0]?.workspace_id ?? account.tenant_id,
+          activeTenantId: ensuredAccess.tenantId,
+          activeWorkspaceId: ensuredAccess.tenantId,
           createdAt: account.created_at,
         },
         memberships,
