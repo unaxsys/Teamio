@@ -157,6 +157,7 @@ const quoteIdent = (name) => `"${String(name).replace(/"/g, '""')}"`;
 const hashPassword = (password) => createHash("sha256").update(password).digest("hex");
 const normalizeText = (value = "") => String(value).trim();
 const normalizeEmail = (email = "") => normalizeText(email).toLowerCase();
+const isUuid = (value = "") => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(normalizeText(value));
 const tenantSchemaName = (tenantId) => `t_${String(tenantId).replaceAll("-", "")}`;
 const MEMBERSHIP_ROLES = ["OWNER", "ADMIN", "MANAGER", "MEMBER", "VIEWER"];
 const INVITE_ROLES = ["ADMIN", "MANAGER", "MEMBER", "VIEWER"];
@@ -311,6 +312,8 @@ const initDb = async () => {
 
     ALTER TABLE public.accounts DROP CONSTRAINT IF EXISTS accounts_tenant_id_key;
     ALTER TABLE public.accounts ALTER COLUMN tenant_id DROP NOT NULL;
+
+    ALTER TABLE public.accounts ADD COLUMN IF NOT EXISTS company_profile JSONB NOT NULL DEFAULT '{}'::jsonb;
 
     CREATE TABLE IF NOT EXISTS public.tenant_members (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -662,7 +665,7 @@ const mapAccountContext = async (client, claims) => {
     createdAt: new Date(tenant.created_at).getTime(),
     workspaces: [
       {
-        id: "workspace-main",
+        id: claims.tenantId,
         name: "Основно пространство",
         description: "Главно работно пространство",
         ownerUserId: owner?.id ?? null,
@@ -672,10 +675,10 @@ const mapAccountContext = async (client, claims) => {
     teams: [],
     members,
     companyProfile: {
-      vatId: "",
-      vatNumber: "",
-      address: "",
-      logoDataUrl: "",
+      vatId: normalizeText(account?.company_profile?.vatId ?? ""),
+      vatNumber: normalizeText(account?.company_profile?.vatNumber ?? ""),
+      address: normalizeText(account?.company_profile?.address ?? ""),
+      logoDataUrl: normalizeText(account?.company_profile?.logoDataUrl ?? ""),
     },
   };
 };
@@ -800,7 +803,7 @@ const server = createServer(async (req, res) => {
         publicId: account.public_id,
         accountId: account.id,
         tenantId,
-        workspaceId: "workspace-main",
+        workspaceId: tenantId,
         role: ensuredRole[0] + ensuredRole.slice(1).toLowerCase(),
         teamIds: [],
       },
@@ -921,19 +924,138 @@ const server = createServer(async (req, res) => {
   if (requestUrl.pathname === "/api/accounts/company-profile" && req.method === "POST") {
     const body = await readBody(req);
     await withTenant(req, res, async (client, claims) => {
-      const profile = body.companyProfile ?? {};
-      await client.query(`UPDATE public.accounts SET display_name = $2 WHERE id = $1`, [claims.accountId, normalizeText(profile.name)]);
-      return { status: 200, body: { ok: true } };
+      const profileInput = body.companyProfile && typeof body.companyProfile === "object" ? body.companyProfile : body;
+      const nextName = normalizeText(profileInput.name);
+      const companyProfile = {
+        vatId: normalizeText(profileInput.vatId),
+        vatNumber: normalizeText(profileInput.vatNumber),
+        address: normalizeText(profileInput.address),
+        logoDataUrl: normalizeText(profileInput.logoDataUrl),
+      };
+
+      await client.query(
+        `UPDATE public.accounts
+         SET display_name = COALESCE(NULLIF($2, ''), display_name),
+             company_profile = $3::jsonb
+         WHERE id = $1`,
+        [claims.accountId, nextName, JSON.stringify(companyProfile)]
+      );
+
+      const account = await mapAccountContext(client, claims);
+      return { status: 200, body: { ok: true, companyProfile: { name: account.name, ...account.companyProfile } } };
+    });
+    return;
+  }
+
+
+  if (requestUrl.pathname === "/api/accounts/company-profile-by-vat" && req.method === "GET") {
+    const vatId = normalizeText(requestUrl.searchParams.get("vatId") ?? "");
+    if (!vatId) {
+      send(res, 400, { message: "Липсва ЕИК." });
+      return;
+    }
+    const result = await pool.query(
+      `SELECT display_name, company_profile
+       FROM public.accounts
+       WHERE company_profile->>'vatId' = $1
+       LIMIT 1`,
+      [vatId]
+    );
+    const row = result.rows[0];
+    if (!row) {
+      send(res, 404, { message: "Няма намерена фирма по този ЕИК." });
+      return;
+    }
+    send(res, 200, {
+      companyProfile: {
+        name: normalizeText(row.display_name ?? ""),
+        vatId,
+        vatNumber: normalizeText(row.company_profile?.vatNumber ?? ""),
+        address: normalizeText(row.company_profile?.address ?? ""),
+        logoDataUrl: normalizeText(row.company_profile?.logoDataUrl ?? ""),
+      },
     });
     return;
   }
 
   if (requestUrl.pathname === "/api/workspace-state" && req.method === "GET") {
-    await withTenant(req, res, async (client) => {
-      const workspaceId = normalizeText(requestUrl.searchParams.get("workspaceId") ?? "workspace-main");
-      const row = (await client.query(`SELECT * FROM workspace_state WHERE workspace_id = $1`, [workspaceId])).rows[0] ?? null;
-      return { status: 200, body: row ? { state: row.payload, updatedAt: Number(row.updated_at) } : { state: null } };
-    });
+    const claims = requireAuth(req, res);
+    if (!claims) return;
+
+    const workspaceIdParam = normalizeText(requestUrl.searchParams.get("workspaceId"));
+    const requesterUserId = normalizeText(claims.accountId);
+    if (!workspaceIdParam || !requesterUserId) {
+      send(res, 400, { error: "Missing required parameters" });
+      return;
+    }
+
+    const requestedWorkspaceId = isUuid(workspaceIdParam) ? workspaceIdParam : null;
+    const fallbackWorkspaceId = normalizeText(claims.tenantId);
+    if (!isUuid(requesterUserId) || (requestedWorkspaceId === null && !isUuid(fallbackWorkspaceId))) {
+      send(res, 400, { error: "Invalid query" });
+      return;
+    }
+
+    const client = await pool.connect();
+    let membership = null;
+    try {
+      await client.query("BEGIN");
+      if (requestedWorkspaceId) {
+        const requestedMembershipRes = await client.query(
+          `SELECT wm.workspace_id, wm.account_id, wm.role, wm.active, t.schema_name
+           FROM public.workspace_memberships wm
+           LEFT JOIN public.tenants t ON t.tenant_id = wm.workspace_id
+           WHERE wm.workspace_id = $1 AND wm.account_id = $2 AND wm.active = true
+           LIMIT 1`,
+          [requestedWorkspaceId, requesterUserId]
+        );
+        membership = requestedMembershipRes.rows[0] ?? null;
+      }
+
+      if (!membership && isUuid(fallbackWorkspaceId)) {
+        const fallbackMembershipRes = await client.query(
+          `SELECT wm.workspace_id, wm.account_id, wm.role, wm.active, t.schema_name
+           FROM public.workspace_memberships wm
+           LEFT JOIN public.tenants t ON t.tenant_id = wm.workspace_id
+           WHERE wm.workspace_id = $1 AND wm.account_id = $2 AND wm.active = true
+           LIMIT 1`,
+          [fallbackWorkspaceId, requesterUserId]
+        );
+        membership = fallbackMembershipRes.rows[0] ?? null;
+      }
+
+      if (!membership) {
+        await client.query("ROLLBACK");
+        send(res, 403, { error: "Access denied" });
+        return;
+      }
+
+      if (!membership.schema_name) {
+        await client.query("ROLLBACK");
+        send(res, 404, { error: "Workspace not found" });
+        return;
+      }
+
+      await client.query(`SET LOCAL search_path TO ${quoteIdent(membership.schema_name)}, public`);
+
+      const row = (await client.query(`SELECT payload, updated_at FROM workspace_state WHERE workspace_id = $1`, [membership.workspace_id])).rows[0] ?? null;
+
+      await client.query("COMMIT");
+      send(res, 200, row ? { state: row.payload ?? null, updatedAt: Number(row.updated_at) } : { state: null });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("GET /api/workspace-state failed", {
+        message: error?.message,
+        stack: error?.stack,
+        workspaceId: membership?.workspace_id ?? null,
+        workspaceIdParam,
+        requesterUserId,
+        queryAccountId: normalizeText(requestUrl.searchParams.get("accountId")) || null,
+      });
+      send(res, 500, { message: "Вътрешна грешка." });
+    } finally {
+      client.release();
+    }
     return;
   }
 
@@ -949,6 +1071,83 @@ const server = createServer(async (req, res) => {
         [`workspace-state-${workspaceId}`, workspaceId, claims.accountId, now, JSON.stringify(body.payload ?? {})]
       );
       return { status: 200, body: { ok: true, updatedAt: now } };
+    });
+    return;
+  }
+
+
+  if (requestUrl.pathname === "/api/boards" && req.method === "GET") {
+    await withTenant(req, res, async (client) => {
+      const boards = (
+        await client.query(
+          `SELECT id, name, created_at
+           FROM boards
+           ORDER BY created_at ASC`
+        )
+      ).rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        createdAt: new Date(row.created_at).getTime(),
+      }));
+      return { status: 200, body: { boards } };
+    });
+    return;
+  }
+
+  if (requestUrl.pathname.match(/^\/api\/boards\/[^/]+\/columns$/) && req.method === "GET") {
+    const boardId = normalizeText(requestUrl.pathname.split("/")[3] ?? "");
+    await withTenant(req, res, async (client) => {
+      const columns = (
+        await client.query(
+          `SELECT id, board_id AS "boardId", name, position, wip_limit AS "wipLimit"
+           FROM columns
+           WHERE board_id = $1
+           ORDER BY position ASC, created_at ASC`,
+          [boardId]
+        )
+      ).rows;
+      return { status: 200, body: { columns } };
+    });
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/tasks" && req.method === "GET") {
+    const boardId = normalizeText(requestUrl.searchParams.get("boardId") ?? "");
+    const assignee = normalizeText(requestUrl.searchParams.get("assignee") ?? "");
+    await withTenant(req, res, async (client, claims) => {
+      try {
+        await client.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_id UUID`);
+      } catch {}
+
+      if (assignee === "me") {
+        const tasks = (
+          await client.query(
+            `SELECT id, board_id AS "boardId", column_id AS "column", column_id AS "listId", title, description,
+                    due_date AS due, created_at AS "createdAt", assignee_id AS "assigneeId"
+             FROM tasks
+             WHERE assignee_id = $1
+             ORDER BY created_at ASC`,
+            [claims.accountId]
+          )
+        ).rows;
+        return { status: 200, body: { tasks } };
+      }
+
+      if (!boardId) {
+        return { status: 400, body: { message: "Липсва boardId." } };
+      }
+
+      const tasks = (
+        await client.query(
+          `SELECT id, board_id AS "boardId", column_id AS "column", column_id AS "listId", title, description,
+                  due_date AS due, created_at AS "createdAt", assignee_id AS "assigneeId"
+           FROM tasks
+           WHERE board_id = $1
+           ORDER BY created_at ASC`,
+          [boardId]
+        )
+      ).rows;
+      return { status: 200, body: { tasks } };
     });
     return;
   }
@@ -974,10 +1173,13 @@ const server = createServer(async (req, res) => {
         createdAt: new Date(),
       };
 
+      try {
+        await client.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_id UUID`);
+      } catch {}
       await client.query(
-        `INSERT INTO tasks (id, board_id, column_id, title, description, due_date)
-         VALUES ($1,$2,$3,$4,$5,$6::date)`,
-        [card.id, card.boardId, card.listId, card.title, card.description || null, card.due || null]
+        `INSERT INTO tasks (id, board_id, column_id, title, description, due_date, assignee_id)
+         VALUES ($1,$2,$3,$4,$5,$6::date,$7)`,
+        [card.id, card.boardId, card.listId, card.title, card.description || null, card.due || null, normalizeText(body.assigneeId) || null]
       );
 
       return { status: 201, body: { card } };
@@ -1006,9 +1208,25 @@ const server = createServer(async (req, res) => {
         listId: normalizeText(body.listId ?? found.column_id),
       };
 
+      try {
+        await client.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_id UUID`);
+      } catch {}
       await client.query(
-        `UPDATE tasks SET title = $2, description = $3, due_date = $4::date, column_id = $5 WHERE id = $1`,
-        [cardId, next.title, next.description || null, next.due || null, next.listId]
+        `UPDATE tasks
+         SET title = $2,
+             description = $3,
+             due_date = $4::date,
+             column_id = $5,
+             assignee_id = COALESCE(NULLIF($6, ''), assignee_id)
+         WHERE id = $1`,
+        [
+          cardId,
+          next.title,
+          next.description || null,
+          next.due || null,
+          next.listId,
+          normalizeText(body.assigneeId || body.assignedUserId || ""),
+        ]
       );
 
       return {
@@ -1059,7 +1277,7 @@ const server = createServer(async (req, res) => {
     const body = await readBody(req);
     const role = normalizeRole(body.role);
     const inviteeEmail = normalizeEmail(body.inviteeEmail ?? body.email);
-    const inviteeUserId = normalizeText(body.inviteeUserId ?? body.public_id ?? body.publicId).toUpperCase();
+    const inviteeUserId = normalizeText(body.inviteeUserId ?? body.public_id ?? body.publicId);
 
     if (!workspaceId || !INVITE_ROLES.includes(role)) {
       send(res, 400, { message: "Невалидна покана." });
@@ -1087,7 +1305,15 @@ const server = createServer(async (req, res) => {
       let inviteeEmailValue = null;
 
       if (hasInviteeUserId) {
-        const account = (await client.query(`SELECT id, email, public_id FROM public.accounts WHERE public_id = upper($1)`, [inviteeUserId])).rows[0];
+        const account = (
+          await client.query(
+            `SELECT id, email, public_id
+             FROM public.accounts
+             WHERE upper(public_id) = upper($1) OR id::text = $1
+             LIMIT 1`,
+            [inviteeUserId]
+          )
+        ).rows[0];
         if (!account) {
           await client.query("ROLLBACK");
           send(res, 404, { message: "User not found" });
@@ -1153,6 +1379,7 @@ const server = createServer(async (req, res) => {
       send(res, 201, {
         invite: normalizedInvite,
         inviteId: invite.id,
+        token: invite.id,
         inviteLink: normalizedInvite.inviteLink,
         status: String(invite.status || "").toUpperCase(),
         role: invite.role,
@@ -1357,12 +1584,16 @@ const server = createServer(async (req, res) => {
       await pool.query(
         `SELECT ti.id, ti.role, ti.created_at AS "createdAt", ti.expires_at AS "expiresAt", ti.token, ti.tenant_id AS "tenantId",
                 t.schema_name AS "workspaceName",
+                COALESCE(owner_acc.display_name, t.schema_name) AS "accountName",
                 inviter.display_name AS "invitedByName",
                 inviter.email AS "invitedByEmail",
                 ti.invited_email AS email
          FROM public.tenant_invites ti
          JOIN public.tenants t ON t.tenant_id = ti.tenant_id
          LEFT JOIN public.accounts inviter ON inviter.id = ti.invited_by_account_id
+         LEFT JOIN public.workspace_memberships owner_wm
+           ON owner_wm.workspace_id = ti.tenant_id AND owner_wm.role = 'OWNER' AND owner_wm.active = true
+         LEFT JOIN public.accounts owner_acc ON owner_acc.id = owner_wm.account_id
          WHERE ti.invited_account_id = $1
            AND ti.status = 'PENDING'
            AND ti.expires_at > now()
@@ -1371,12 +1602,16 @@ const server = createServer(async (req, res) => {
 
          SELECT wi.id, wi.role, wi.created_at AS "createdAt", NULL::timestamptz AS "expiresAt", wi.id::text AS token, wi.workspace_id AS "tenantId",
                 t.schema_name AS "workspaceName",
+                COALESCE(owner_acc.display_name, t.schema_name) AS "accountName",
                 inviter.display_name AS "invitedByName",
                 inviter.email AS "invitedByEmail",
                 wi.invitee_email AS email
          FROM public.workspace_invites wi
          LEFT JOIN public.tenants t ON t.tenant_id = wi.workspace_id
          LEFT JOIN public.accounts inviter ON inviter.id = wi.invited_by_account_id
+         LEFT JOIN public.workspace_memberships owner_wm
+           ON owner_wm.workspace_id = wi.workspace_id AND owner_wm.role = 'OWNER' AND owner_wm.active = true
+         LEFT JOIN public.accounts owner_acc ON owner_acc.id = owner_wm.account_id
          WHERE wi.invitee_account_id = $1
            AND wi.status = 'pending'
 
@@ -1624,7 +1859,7 @@ const server = createServer(async (req, res) => {
       if (!isOwnerOrAdmin(claims.membershipRole)) {
         return { status: 403, body: { message: "Недостатъчни права." } };
       }
-      const memberId = normalizeText(body.memberId);
+      const memberId = normalizeText(body.memberUserId || body.memberId);
       const membership = await getMembership(client, claims.tenantId, memberId);
       if (!membership) {
         return { status: 404, body: { message: "Членът не е намерен." } };
@@ -1643,11 +1878,44 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+
+  if (requestUrl.pathname === "/api/accounts/members/role" && req.method === "POST") {
+    const body = await readBody(req);
+    await withTenant(req, res, async (client, claims) => {
+      if (!isOwnerOrAdmin(claims.membershipRole)) {
+        return { status: 403, body: { message: "Недостатъчни права." } };
+      }
+
+      const memberId = normalizeText(body.memberUserId || body.memberId);
+      const nextRole = normalizeRole(body.role);
+      if (!memberId || !MEMBERSHIP_ROLES.includes(nextRole) || nextRole === 'OWNER') {
+        return { status: 400, body: { message: "Невалидна роля." } };
+      }
+
+      const membership = await getMembership(client, claims.tenantId, memberId);
+      if (!membership) {
+        return { status: 404, body: { message: "Членът не е намерен." } };
+      }
+      if (membership.role === 'OWNER') {
+        return { status: 409, body: { message: "Owner ролята не може да се променя оттук." } };
+      }
+
+      await client.query(
+        `UPDATE public.workspace_memberships
+         SET role = $3
+         WHERE workspace_id = $1 AND account_id = $2`,
+        [claims.tenantId, memberId, nextRole]
+      );
+      return { status: 200, body: { ok: true } };
+    });
+    return;
+  }
+
   if (requestUrl.pathname === "/api/workspaces/members-summary" && req.method === "GET") {
     await withTenant(req, res, async (client, claims) => {
       const acceptedMembers = (
         await client.query(
-          `SELECT wm.account_id AS id, a.email, a.display_name AS name, wm.role, wm.created_at AS "joinedAt"
+          `SELECT wm.account_id AS id, wm.account_id AS "userId", a.email, a.display_name AS name, wm.role, wm.created_at AS "joinedAt"
            FROM public.workspace_memberships wm
            JOIN public.accounts a ON a.id = wm.account_id
            WHERE wm.workspace_id = $1 AND wm.active = true
