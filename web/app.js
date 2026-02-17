@@ -852,40 +852,6 @@ const apiRequest = async (path, options = {}) => {
       if (response.status === 502) {
         return {
           ok: false,
-          status: 502,
-          data: {
-            message:
-              "Сървърът върна 502 Bad Gateway. Вероятно backend процесът е паднал или reverse proxy не може да се свърже към него.",
-          },
-        };
-      }
-      return { ok: false, status: response.status, data };
-    }
-    return { ok: true, status: response.status, data };
-  } catch (error) {
-    const isGithubPages = window.location.hostname.endsWith("github.io");
-    const hint = isGithubPages
-      ? ` Нужен е външен API сървър. Задай го така: localStorage.setItem("teamio-api-base", "https://your-api-domain.com") и презареди.`
-      : ` Ако си на IP сървър, пробвай: localStorage.removeItem("teamio-api-base"); location.reload()`;
-    return { ok: false, status: 0, data: { message: `Сървърът не е достъпен (${base}).${hint}` } };
-  }
-};
-  try {
-    let { response, data } = await fetchJson(base);
-
-    if (
-      !response.ok &&
-      response.status >= 500 &&
-      base !== sameOriginBase &&
-      !["localhost", "127.0.0.1"].includes(window.location.hostname)
-    ) {
-      ({ response, data } = await fetchJson(sameOriginBase));
-    }
-
-    if (!response.ok) {
-      if (response.status === 502) {
-        return {
-          ok: false,
           data: {
             message:
               "Сървърът върна 502 Bad Gateway. Вероятно backend процесът е паднал или reverse proxy не може да се свърже към него.",
