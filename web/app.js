@@ -2204,7 +2204,7 @@ const renderMyInvites = () => {
 
   const accounts = loadAccounts();
   invites.forEach((invite) => {
-    const accountName = invite.accountName || accounts.find((account) => account.id === invite.accountId)?.name || "Неизвестна фирма";
+    const accountName = invite.accountName || invite.workspaceName || accounts.find((account) => account.id === invite.accountId)?.name || "Неизвестна фирма";
     const invitedByName =
       invite.invitedByName ||
       "Неизвестен";
@@ -2240,12 +2240,25 @@ const renderMyInvites = () => {
           saveInvites(updatedInvites);
         }
 
-        const nextCurrentUser = { ...currentUser, accountId: invite.accountId, role: invite.role, teamIds: currentUser.teamIds ?? [] };
+        const nextCurrentUser = {
+          ...currentUser,
+          accountId: invite.accountId ?? currentUser.accountId,
+          role: invite.role,
+          tenantId: invite.tenantId ?? currentUser.tenantId,
+          workspaceId: invite.tenantId ?? currentUser.workspaceId,
+          teamIds: currentUser.teamIds ?? [],
+        };
         setCurrentUser(nextCurrentUser);
+
+        const allBoards = JSON.parse(localStorage.getItem("teamio-boards") ?? "[]");
+        const inviteWorkspaceBoard = allBoards.find((board) => board?.workspaceId && board.workspaceId === invite.tenantId);
         if (invite.boardId) {
           setCurrentBoardId(invite.boardId);
+        } else if (inviteWorkspaceBoard?.id) {
+          setCurrentBoardId(inviteWorkspaceBoard.id);
         }
 
+        renderBoardSelector();
         renderInvites();
         renderMyInvites();
         renderTeams();

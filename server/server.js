@@ -1439,12 +1439,16 @@ const server = createServer(async (req, res) => {
       await pool.query(
         `SELECT ti.id, ti.role, ti.created_at AS "createdAt", ti.expires_at AS "expiresAt", ti.token, ti.tenant_id AS "tenantId",
                 t.schema_name AS "workspaceName",
+                COALESCE(owner_acc.display_name, t.schema_name) AS "accountName",
                 inviter.display_name AS "invitedByName",
                 inviter.email AS "invitedByEmail",
                 ti.invited_email AS email
          FROM public.tenant_invites ti
          JOIN public.tenants t ON t.tenant_id = ti.tenant_id
          LEFT JOIN public.accounts inviter ON inviter.id = ti.invited_by_account_id
+         LEFT JOIN public.workspace_memberships owner_wm
+           ON owner_wm.workspace_id = ti.tenant_id AND owner_wm.role = 'OWNER' AND owner_wm.active = true
+         LEFT JOIN public.accounts owner_acc ON owner_acc.id = owner_wm.account_id
          WHERE ti.invited_account_id = $1
            AND ti.status = 'PENDING'
            AND ti.expires_at > now()
@@ -1453,12 +1457,16 @@ const server = createServer(async (req, res) => {
 
          SELECT wi.id, wi.role, wi.created_at AS "createdAt", NULL::timestamptz AS "expiresAt", wi.id::text AS token, wi.workspace_id AS "tenantId",
                 t.schema_name AS "workspaceName",
+                COALESCE(owner_acc.display_name, t.schema_name) AS "accountName",
                 inviter.display_name AS "invitedByName",
                 inviter.email AS "invitedByEmail",
                 wi.invitee_email AS email
          FROM public.workspace_invites wi
          LEFT JOIN public.tenants t ON t.tenant_id = wi.workspace_id
          LEFT JOIN public.accounts inviter ON inviter.id = wi.invited_by_account_id
+         LEFT JOIN public.workspace_memberships owner_wm
+           ON owner_wm.workspace_id = wi.workspace_id AND owner_wm.role = 'OWNER' AND owner_wm.active = true
+         LEFT JOIN public.accounts owner_acc ON owner_acc.id = owner_wm.account_id
          WHERE wi.invitee_account_id = $1
            AND wi.status = 'pending'
 
