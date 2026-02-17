@@ -198,7 +198,7 @@
               <div class="board-topbar">
                 <div class="board-topbar__title-wrap">
                   <h2 id="current-board-name">Моето табло</h2>
-                  <span class="board-topbar__visibility">Workspace</span>
+                  <span class="board-topbar__visibility" id="board-context-visibility">Workspace</span>
                 </div>
                 <div class="board-topbar__actions">
                   <input
@@ -317,7 +317,7 @@
               <button type="button" class="primary" id="create-workspace-button">Create workspace</button>
             </div>
             <div class="panel-card" style="margin-top: 16px;">
-              <h3>Accepted members</h3>
+              <h3>Accepted members <span class="nav-badge" id="accepted-members-count">0</span></h3>
               <div class="panel-list" id="accepted-members-list"></div>
             </div>
           </div>
