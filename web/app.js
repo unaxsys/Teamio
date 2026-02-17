@@ -27,6 +27,7 @@ const formEl = document.getElementById("task-form");
 const columnSelect = formEl.querySelector("select[name=\"column\"]");
 const newBoardButton = document.getElementById("new-board");
 const boardSelector = document.getElementById("board-selector");
+const boardSelectorHint = document.getElementById("board-selector-hint");
 const createBoardButton = document.getElementById("create-board");
 const renameBoardButton = document.getElementById("rename-board");
 const deleteBoardButton = document.getElementById("delete-board");
@@ -102,6 +103,9 @@ const showBoardFilterCheckbox = document.getElementById("setting-show-board-filt
 const boardFilterPanel = document.getElementById("board-filter-panel");
 const doneCriteriaHelp = document.getElementById("done-criteria-help");
 const companyProfileForm = document.getElementById("company-profile-form");
+const profilePersonalModeCheckbox = document.getElementById("profile-personal-mode");
+const userProfileSetting = document.getElementById("user-profile-setting");
+const userProfileForm = document.getElementById("user-profile-form");
 const settingsAccordion = document.getElementById("settings-accordion");
 const workspaceCompanyName = document.getElementById("workspace-company-name");
 const workspaceCompanyLogo = document.getElementById("workspace-company-logo");
@@ -111,6 +115,8 @@ const workspaceCompanyChipLogo = document.getElementById("workspace-company-chip
 const workspaceCompanyChipName = document.getElementById("workspace-company-chip-name");
 
 const currentBoardName = document.getElementById("current-board-name");
+const boardContextVisibility = document.getElementById("board-context-visibility");
+const acceptedMembersCount = document.getElementById("accepted-members-count");
 const boardSearchInput = document.getElementById("board-search");
 const boardFilterButton = document.getElementById("board-filter-button");
 const boardMenuButton = document.getElementById("board-menu-button");
@@ -373,7 +379,22 @@ const loadBoards = () => {
     persistAndSync("teamio-current-board", seeded[0].id);
     return seeded;
   }
-  const normalized = ensureDefaultBoard(boards.map((board) => normalizeBoard(board)));
+  let normalized = ensureDefaultBoard(boards.map((board) => normalizeBoard(board)));
+  if (workspace?.id && !normalized.some((board) => board.workspaceId === workspace.id)) {
+    normalized = [
+      ...normalized,
+      normalizeBoard({
+        id: `board-workspace-${workspace.id}`,
+        name: `${workspace.name || "Workspace"} борд`,
+        createdAt: Date.now(),
+        visibility: "workspace",
+        createdBy: workspace.ownerUserId ?? loadCurrentUser()?.id ?? null,
+        workspaceId: workspace.id,
+        members: [],
+        settings: { allowComments: true, allowAttachments: true, labelsEnabled: true },
+      }),
+    ];
+  }
   persistAndSync("teamio-boards", JSON.stringify(normalized));
   if (!workspace?.id) {
     return normalized;
@@ -417,13 +438,21 @@ const renderBoardSelector = () => {
   const boards = loadBoards();
   const currentBoardId = getCurrentBoardId();
   boardSelector.innerHTML = "";
+  const workspace = getCurrentWorkspace();
   boards.forEach((board) => {
     const option = document.createElement("option");
     option.value = board.id;
-    option.textContent = board.name;
+    const isPersonalBoard = !board.workspaceId;
+    const isCurrentWorkspaceBoard = Boolean(workspace?.id && board.workspaceId === workspace.id);
+    const boardScopeLabel = isPersonalBoard ? "Личен" : (isCurrentWorkspaceBoard ? "Фирмен" : "Друг workspace");
+    option.textContent = `[${boardScopeLabel}] ${board.name}`;
     option.selected = board.id === currentBoardId;
     boardSelector.append(option);
   });
+  if (boardSelectorHint) {
+    boardSelectorHint.hidden = true;
+    boardSelectorHint.textContent = "";
+  }
 };
 
 const updateBoardTopbar = () => {
@@ -431,7 +460,25 @@ const updateBoardTopbar = () => {
     return;
   }
   const currentBoard = loadBoards().find((board) => board.id === getCurrentBoardId());
+  const currentUser = loadCurrentUser();
+  const workspace = getCurrentWorkspace();
   currentBoardName.textContent = currentBoard?.name ?? "Работно табло";
+
+  if (!boardContextVisibility) {
+    return;
+  }
+
+  const isPersonalBoard = !currentBoard?.workspaceId || currentBoard.workspaceId === "board-default";
+  const isSharedWorkspace = Boolean(workspace?.id && workspace.ownerUserId && currentUser?.id && workspace.ownerUserId !== currentUser.id);
+  if (isPersonalBoard) {
+    boardContextVisibility.textContent = "Личен борд";
+    return;
+  }
+  if (isSharedWorkspace) {
+    boardContextVisibility.textContent = "Споделен workspace борд";
+    return;
+  }
+  boardContextVisibility.textContent = "Workspace борд";
 };
 
 const toggleBoardMenu = (isOpen) => {
@@ -612,12 +659,17 @@ const getVisibleTasks = () => {
   const user = loadCurrentUser();
   const allTasks = loadTasks();
   const currentBoardId = getCurrentBoardId();
+  const boards = loadBoards();
+  const currentBoard = boards.find((board) => board.id === currentBoardId);
   const accountTasks = allTasks.filter((task) => (!user?.accountId || task.accountId === user.accountId) && (task.boardId ?? currentBoardId) === currentBoardId);
+  const boardScopedTasks = !currentBoard?.workspaceId
+    ? accountTasks.filter((task) => (task.assignedUserIds ?? []).includes(user?.id))
+    : accountTasks;
   const selectedTeamIds = getSelectedValues(boardTeamFilter);
   if (selectedTeamIds.length === 0) {
-    return accountTasks;
+    return boardScopedTasks;
   }
-  return accountTasks.filter((task) => (task.teamIds ?? []).some((teamId) => selectedTeamIds.includes(teamId)));
+  return boardScopedTasks.filter((task) => (task.teamIds ?? []).some((teamId) => selectedTeamIds.includes(teamId)));
 };
 
 
@@ -646,6 +698,23 @@ const getCalendarItems = () => {
 const normalizeEmail = (email) => email.trim().toLowerCase();
 
 const normalizeText = (value) => value.trim();
+const loadUserProfilePreferences = () => JSON.parse(localStorage.getItem("teamio-user-profile-preferences") ?? "{}");
+const saveUserProfilePreferences = (preferences) => {
+  persistAndSync("teamio-user-profile-preferences", JSON.stringify(preferences));
+};
+const getCurrentUserProfilePreference = () => {
+  const user = loadCurrentUser();
+  if (!user?.id) return { personalMode: false, profile: {} };
+  const all = loadUserProfilePreferences();
+  return all[user.id] ?? { personalMode: false, profile: {} };
+};
+const saveCurrentUserProfilePreference = (nextValue) => {
+  const user = loadCurrentUser();
+  if (!user?.id) return;
+  const all = loadUserProfilePreferences();
+  all[user.id] = { ...(all[user.id] ?? {}), ...nextValue };
+  saveUserProfilePreferences(all);
+};
 
 const getInviteTokenFromUrl = () => {
   const params = new URLSearchParams(window.location.search);
@@ -910,6 +979,7 @@ let syncTimer = null;
 let syncDirty = false;
 let invitesSyncInFlight = false;
 let lastInvitesSyncKey = "";
+let workspaceMembersCountCache = null;
 
 const pushWorkspaceState = async () => {
   const context = getSyncContext();
@@ -2004,18 +2074,21 @@ const renderMembersInvitesSummary = async () => {
   const hasWorkspaceAccess = Boolean(loadCurrentUser()?.tenantId && loadCurrentUser()?.role);
   if (noWorkspaceAccess) noWorkspaceAccess.hidden = hasWorkspaceAccess;
   if (!hasWorkspaceAccess) {
+    workspaceMembersCountCache = null;
     if (acceptedMembersList) acceptedMembersList.innerHTML = "";
     if (inviteList) inviteList.innerHTML = "";
+    if (acceptedMembersCount) acceptedMembersCount.textContent = "0";
     return;
   }
   if (!acceptedMembersList) {
     return;
   }
   const user = loadCurrentUser();
-  if (!user?.accountId || !hasManagementAccess()) {
+  if (!user?.accountId) {
     acceptedMembersList.innerHTML = "";
     if (pendingInvitesCount) pendingInvitesCount.textContent = "0";
     if (membersInvitesBadge) membersInvitesBadge.textContent = "0";
+    if (acceptedMembersCount) acceptedMembersCount.textContent = "0";
     return;
   }
 
@@ -2027,6 +2100,15 @@ const renderMembersInvitesSummary = async () => {
 
   const pending = Array.isArray(apiResult.data?.pendingInvites) ? apiResult.data.pendingInvites : [];
   const accepted = Array.isArray(apiResult.data?.acceptedMembers) ? apiResult.data.acceptedMembers : [];
+  workspaceMembersCountCache = Math.max(accepted.length, 1);
+  if (acceptedMembersCount) acceptedMembersCount.textContent = String(accepted.length);
+  updateReports();
+
+  if (!hasManagementAccess()) {
+    acceptedMembersList.innerHTML = "";
+    if (pendingInvitesCount) pendingInvitesCount.textContent = "0";
+    return;
+  }
 
   if (pendingInvitesCount) pendingInvitesCount.textContent = String(pending.length);
   if (membersInvitesBadge) membersInvitesBadge.textContent = String(pending.length);
@@ -2090,7 +2172,36 @@ const renderMembersInvitesSummary = async () => {
       const joinedAt = member.joinedAt ? new Date(member.joinedAt).toLocaleDateString("bg-BG") : "-";
       item.innerHTML = `<div><strong>${member.name}</strong><div class="panel-list__meta">${member.email} · ${member.role} · ${joinedAt}</div></div>`;
 
-      if (loadCurrentUser()?.id === getCurrentAccount()?.ownerUserId) {
+      if (hasManagementAccess() && normalizeRole(member.role) !== "Owner") {
+        const roleSelect = document.createElement("select");
+        ["Admin", "Manager", "Member", "Viewer"].forEach((roleOption) => {
+          const option = document.createElement("option");
+          option.value = roleOption;
+          option.textContent = roleOption;
+          option.selected = normalizeRole(member.role) === roleOption;
+          roleSelect.append(option);
+        });
+
+        const saveRoleButton = document.createElement("button");
+        saveRoleButton.type = "button";
+        saveRoleButton.className = "ghost";
+        saveRoleButton.textContent = "Запази роля";
+        saveRoleButton.addEventListener("click", async () => {
+          const apiResult = await apiRequest("/api/accounts/members/role", {
+            method: "POST",
+            body: JSON.stringify({
+              memberUserId: member.userId ?? member.id,
+              role: roleSelect.value,
+            }),
+          });
+          if (apiResult?.ok) {
+            setAuthMessage(`Ролята на ${member.email || member.name} е обновена.`);
+            renderMembersInvitesSummary();
+            return;
+          }
+          setAuthMessage(apiResult?.data?.message || "Неуспешна смяна на роля.");
+        });
+
         const removeButton = document.createElement("button");
         removeButton.type = "button";
         removeButton.className = "ghost";
@@ -2130,7 +2241,7 @@ const renderMembersInvitesSummary = async () => {
 
         const actions = document.createElement("div");
         actions.className = "invite-actions";
-        actions.append(removeButton);
+        actions.append(roleSelect, saveRoleButton, removeButton);
         item.append(actions);
       }
 
@@ -2171,7 +2282,7 @@ const renderMyInvites = () => {
 
   const accounts = loadAccounts();
   invites.forEach((invite) => {
-    const accountName = invite.accountName || accounts.find((account) => account.id === invite.accountId)?.name || "Неизвестна фирма";
+    const accountName = invite.accountName || invite.workspaceName || accounts.find((account) => account.id === invite.accountId)?.name || "Неизвестна фирма";
     const invitedByName =
       invite.invitedByName ||
       "Неизвестен";
@@ -2207,12 +2318,25 @@ const renderMyInvites = () => {
           saveInvites(updatedInvites);
         }
 
-        const nextCurrentUser = { ...currentUser, accountId: invite.accountId, role: invite.role, teamIds: currentUser.teamIds ?? [] };
+        const nextCurrentUser = {
+          ...currentUser,
+          accountId: invite.accountId ?? currentUser.accountId,
+          role: invite.role,
+          tenantId: invite.tenantId ?? currentUser.tenantId,
+          workspaceId: invite.tenantId ?? currentUser.workspaceId,
+          teamIds: currentUser.teamIds ?? [],
+        };
         setCurrentUser(nextCurrentUser);
+
+        const allBoards = JSON.parse(localStorage.getItem("teamio-boards") ?? "[]");
+        const inviteWorkspaceBoard = allBoards.find((board) => board?.workspaceId && board.workspaceId === invite.tenantId);
         if (invite.boardId) {
           setCurrentBoardId(invite.boardId);
+        } else if (inviteWorkspaceBoard?.id) {
+          setCurrentBoardId(inviteWorkspaceBoard.id);
         }
 
+        renderBoardSelector();
         renderInvites();
         renderMyInvites();
         renderTeams();
@@ -2582,6 +2706,14 @@ const renderCalendar = () => {
   renderCalendarGrid(items);
 };
 
+const getWorkspaceMemberCount = () => {
+  if (Number.isFinite(workspaceMembersCountCache) && workspaceMembersCountCache > 0) {
+    return workspaceMembersCountCache;
+  }
+  const accountMembersCount = getCurrentAccount()?.members?.length ?? 0;
+  return Math.max(1, accountMembersCount);
+};
+
 const updateReports = () => {
   const tasks = getVisibleTasks().map(normalizeTaskCompletion);
   const doneCount = tasks.filter((task) => task.completed).length;
@@ -2591,7 +2723,7 @@ const updateReports = () => {
   reportDone.textContent = doneCount.toString();
   reportActive.textContent = activeCount.toString();
   reportVelocity.textContent = `${doneThisWeek} / 7 дни`;
-  const teamCount = getCurrentAccount()?.members?.length ?? 0;
+  const teamCount = getWorkspaceMemberCount();
   if (statTeamSize) {
     statTeamSize.textContent = `${teamCount}`;
   }
@@ -3067,6 +3199,39 @@ const updateWorkspaceCompanyIdentity = () => {
   }
 };
 
+const syncProfileSettingsVisibility = () => {
+  const preference = getCurrentUserProfilePreference();
+  const personalMode = Boolean(preference.personalMode);
+  if (profilePersonalModeCheckbox) {
+    profilePersonalModeCheckbox.checked = personalMode;
+  }
+  const companySection = companyProfileForm?.closest(".setting-item");
+  if (companySection) {
+    companySection.hidden = personalMode || !isOwnerOfCurrentAccount();
+  }
+  if (userProfileSetting) {
+    userProfileSetting.hidden = !personalMode;
+  }
+};
+
+const syncUserProfileForm = () => {
+  if (!userProfileForm) return;
+  const preference = getCurrentUserProfilePreference();
+  const profile = preference.profile ?? {};
+  Object.entries({
+    fullName: profile.fullName ?? "",
+    birthDate: profile.birthDate ?? "",
+    city: profile.city ?? "",
+    district: profile.district ?? "",
+    streetAddress: profile.streetAddress ?? "",
+    phone: profile.phone ?? "",
+    jobTitle: profile.jobTitle ?? "",
+    department: profile.department ?? "",
+  }).forEach(([key, value]) => {
+    if (userProfileForm.elements[key]) userProfileForm.elements[key].value = value;
+  });
+};
+
 const syncCompanyProfileForm = async () => {
   if (!companyProfileForm) {
     updateWorkspaceCompanyIdentity();
@@ -3076,18 +3241,16 @@ const syncCompanyProfileForm = async () => {
   const account = getCurrentAccount();
   const currentUser = loadCurrentUser();
   const isOwner = isOwnerOfCurrentAccount();
-  const companySection = companyProfileForm.closest(".setting-item");
-
-  if (!account || !currentUser || !isOwner) {
-    if (companySection) {
-      companySection.hidden = true;
-    }
+  if (!account || !currentUser) {
+    syncProfileSettingsVisibility();
     updateWorkspaceCompanyIdentity();
     return;
   }
 
-  if (companySection) {
-    companySection.hidden = false;
+  if (!isOwner) {
+    syncProfileSettingsVisibility();
+    updateWorkspaceCompanyIdentity();
+    return;
   }
 
   const params = new URLSearchParams({ accountId: account.id, requesterUserId: currentUser.id });
@@ -3122,7 +3285,61 @@ const syncCompanyProfileForm = async () => {
   companyProfileForm.elements.logo.value = "";
 
   updateWorkspaceCompanyIdentity();
+  syncProfileSettingsVisibility();
+  syncUserProfileForm();
 };
+
+profilePersonalModeCheckbox?.addEventListener("change", () => {
+  saveCurrentUserProfilePreference({ personalMode: Boolean(profilePersonalModeCheckbox.checked) });
+  syncProfileSettingsVisibility();
+  syncUserProfileForm();
+});
+
+userProfileForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const formData = new FormData(userProfileForm);
+  const avatarFile = formData.get("avatar");
+  const existing = getCurrentUserProfilePreference().profile ?? {};
+  const avatarDataUrl = avatarFile && typeof avatarFile === "object" && avatarFile.size > 0
+    ? await fileToDataUrl(avatarFile)
+    : (existing.avatarDataUrl ?? "");
+  saveCurrentUserProfilePreference({
+    profile: {
+      fullName: normalizeText(formData.get("fullName")?.toString() ?? ""),
+      birthDate: normalizeText(formData.get("birthDate")?.toString() ?? ""),
+      city: normalizeText(formData.get("city")?.toString() ?? ""),
+      district: normalizeText(formData.get("district")?.toString() ?? ""),
+      streetAddress: normalizeText(formData.get("streetAddress")?.toString() ?? ""),
+      phone: normalizeText(formData.get("phone")?.toString() ?? ""),
+      jobTitle: normalizeText(formData.get("jobTitle")?.toString() ?? ""),
+      department: normalizeText(formData.get("department")?.toString() ?? ""),
+      avatarDataUrl,
+    },
+  });
+  setAuthMessage("Потребителските данни са запазени.");
+  syncUserProfileForm();
+});
+
+companyProfileForm?.elements?.vatId?.addEventListener("blur", async () => {
+  const vatId = normalizeText(companyProfileForm.elements.vatId.value ?? "");
+  if (!vatId) {
+    return;
+  }
+  const apiResult = await apiRequest(`/api/accounts/company-profile-by-vat?vatId=${encodeURIComponent(vatId)}`);
+  if (!apiResult?.ok || !apiResult.data?.companyProfile) {
+    return;
+  }
+  const profile = apiResult.data.companyProfile;
+  if (!normalizeText(companyProfileForm.elements.name.value)) {
+    companyProfileForm.elements.name.value = profile.name ?? "";
+  }
+  if (!normalizeText(companyProfileForm.elements.vatNumber.value)) {
+    companyProfileForm.elements.vatNumber.value = profile.vatNumber ?? "";
+  }
+  if (!normalizeText(companyProfileForm.elements.address.value)) {
+    companyProfileForm.elements.address.value = profile.address ?? "";
+  }
+});
 
 companyProfileForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -3490,25 +3707,32 @@ inviteForm?.addEventListener("submit", async (event) => {
     return;
   }
   const formData = new FormData(inviteForm);
-  const inviteTarget = normalizeText(formData.get("inviteTarget")?.toString() ?? "");
-  const explicitUserId = normalizeText(formData.get("invitedUserId")?.toString() ?? "");
-  const targetLooksLikeEmail = inviteTarget.includes("@");
-  const inviteeEmail = targetLooksLikeEmail ? normalizeEmail(inviteTarget) : "";
-  const inviteeUserId = (explicitUserId || (!targetLooksLikeEmail ? inviteTarget : "")).toUpperCase();
-  const hasInviteeEmail = Boolean(inviteeEmail);
-  const hasInviteeUserId = Boolean(inviteeUserId);
-  const inviteTargetLabel = inviteeUserId || inviteeEmail || inviteTarget;
+  const inviteeEmailRaw = normalizeText(formData.get("inviteEmail")?.toString() ?? "");
+  const inviteeUserIdRaw = normalizeText(formData.get("invitedUserId")?.toString() ?? "");
+  const inviteeEmail = inviteeEmailRaw ? normalizeEmail(inviteeEmailRaw) : "";
+  const inviteeUserId = inviteeUserIdRaw.toUpperCase();
+  const hasInviteeEmail = Boolean(inviteeEmailRaw);
+  const hasInviteeUserId = Boolean(inviteeUserIdRaw);
+  const inviteTargetLabel = inviteeUserId || inviteeEmail || inviteeUserIdRaw || inviteeEmailRaw;
   const role = normalizeRole(formData.get("role")?.toString() ?? "Member");
   if (!canInviteRole(role)) {
     setAuthMessage("Можеш да каниш само с роля по-ниска от твоята.");
     return;
   }
   const account = getCurrentAccount();
-  if (!account || !inviteTarget) {
+  if (!account) {
     return;
   }
-  if (hasInviteeEmail === hasInviteeUserId) {
-    setAuthMessage("Попълни точно едно поле: имейл или потребителско ID.");
+  if (!hasInviteeEmail && !hasInviteeUserId) {
+    setAuthMessage("Попълнете имейл или потребителско ID.");
+    return;
+  }
+  if (hasInviteeEmail && hasInviteeUserId) {
+    setAuthMessage("Попълнете само едно поле: имейл ИЛИ потребителско ID.");
+    return;
+  }
+  if (hasInviteeEmail && !inviteeEmail) {
+    setAuthMessage("Невалиден имейл адрес.");
     return;
   }
 
@@ -3517,7 +3741,7 @@ inviteForm?.addEventListener("submit", async (event) => {
     id: `invite-${Date.now()}`,
     accountId: account.id,
     invitedByUserId: loadCurrentUser()?.id ?? null,
-    email: inviteeEmail || "",
+    email: hasInviteeEmail ? inviteeEmail : "",
     role,
     token: localToken,
     expiresAt: Date.now() + 48 * 60 * 60 * 1000,
