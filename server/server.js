@@ -1714,7 +1714,7 @@ const server = createServer(async (req, res) => {
       if (!isOwnerOrAdmin(claims.membershipRole)) {
         return { status: 403, body: { message: "Недостатъчни права." } };
       }
-      const memberId = normalizeText(body.memberId);
+      const memberId = normalizeText(body.memberUserId || body.memberId);
       const membership = await getMembership(client, claims.tenantId, memberId);
       if (!membership) {
         return { status: 404, body: { message: "Членът не е намерен." } };
@@ -1733,11 +1733,44 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+
+  if (requestUrl.pathname === "/api/accounts/members/role" && req.method === "POST") {
+    const body = await readBody(req);
+    await withTenant(req, res, async (client, claims) => {
+      if (!isOwnerOrAdmin(claims.membershipRole)) {
+        return { status: 403, body: { message: "Недостатъчни права." } };
+      }
+
+      const memberId = normalizeText(body.memberUserId || body.memberId);
+      const nextRole = normalizeRole(body.role);
+      if (!memberId || !MEMBERSHIP_ROLES.includes(nextRole) || nextRole === 'OWNER') {
+        return { status: 400, body: { message: "Невалидна роля." } };
+      }
+
+      const membership = await getMembership(client, claims.tenantId, memberId);
+      if (!membership) {
+        return { status: 404, body: { message: "Членът не е намерен." } };
+      }
+      if (membership.role === 'OWNER') {
+        return { status: 409, body: { message: "Owner ролята не може да се променя оттук." } };
+      }
+
+      await client.query(
+        `UPDATE public.workspace_memberships
+         SET role = $3
+         WHERE workspace_id = $1 AND account_id = $2`,
+        [claims.tenantId, memberId, nextRole]
+      );
+      return { status: 200, body: { ok: true } };
+    });
+    return;
+  }
+
   if (requestUrl.pathname === "/api/workspaces/members-summary" && req.method === "GET") {
     await withTenant(req, res, async (client, claims) => {
       const acceptedMembers = (
         await client.query(
-          `SELECT wm.account_id AS id, a.email, a.display_name AS name, wm.role, wm.created_at AS "joinedAt"
+          `SELECT wm.account_id AS id, wm.account_id AS "userId", a.email, a.display_name AS name, wm.role, wm.created_at AS "joinedAt"
            FROM public.workspace_memberships wm
            JOIN public.accounts a ON a.id = wm.account_id
            WHERE wm.workspace_id = $1 AND wm.active = true

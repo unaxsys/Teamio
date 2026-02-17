@@ -27,6 +27,7 @@ const formEl = document.getElementById("task-form");
 const columnSelect = formEl.querySelector("select[name=\"column\"]");
 const newBoardButton = document.getElementById("new-board");
 const boardSelector = document.getElementById("board-selector");
+const boardSelectorHint = document.getElementById("board-selector-hint");
 const createBoardButton = document.getElementById("create-board");
 const renameBoardButton = document.getElementById("rename-board");
 const deleteBoardButton = document.getElementById("delete-board");
@@ -102,6 +103,9 @@ const showBoardFilterCheckbox = document.getElementById("setting-show-board-filt
 const boardFilterPanel = document.getElementById("board-filter-panel");
 const doneCriteriaHelp = document.getElementById("done-criteria-help");
 const companyProfileForm = document.getElementById("company-profile-form");
+const profilePersonalModeCheckbox = document.getElementById("profile-personal-mode");
+const userProfileSetting = document.getElementById("user-profile-setting");
+const userProfileForm = document.getElementById("user-profile-form");
 const settingsAccordion = document.getElementById("settings-accordion");
 const workspaceCompanyName = document.getElementById("workspace-company-name");
 const workspaceCompanyLogo = document.getElementById("workspace-company-logo");
@@ -419,13 +423,20 @@ const renderBoardSelector = () => {
   const boards = loadBoards();
   const currentBoardId = getCurrentBoardId();
   boardSelector.innerHTML = "";
+  const workspace = getCurrentWorkspace();
   boards.forEach((board) => {
     const option = document.createElement("option");
     option.value = board.id;
-    option.textContent = board.name;
+    const isPersonalBoard = !board.workspaceId;
+    const isCurrentWorkspaceBoard = Boolean(workspace?.id && board.workspaceId === workspace.id);
+    const boardScopeLabel = isPersonalBoard ? "Личен" : (isCurrentWorkspaceBoard ? "Фирмен" : "Друг workspace");
+    option.textContent = `[${boardScopeLabel}] ${board.name}`;
     option.selected = board.id === currentBoardId;
     boardSelector.append(option);
   });
+  if (boardSelectorHint) {
+    boardSelectorHint.textContent = "[Личен] показва само твоите задачи · [Фирмен] показва всички задачи";
+  }
 };
 
 const updateBoardTopbar = () => {
@@ -632,12 +643,17 @@ const getVisibleTasks = () => {
   const user = loadCurrentUser();
   const allTasks = loadTasks();
   const currentBoardId = getCurrentBoardId();
+  const boards = loadBoards();
+  const currentBoard = boards.find((board) => board.id === currentBoardId);
   const accountTasks = allTasks.filter((task) => (!user?.accountId || task.accountId === user.accountId) && (task.boardId ?? currentBoardId) === currentBoardId);
+  const boardScopedTasks = !currentBoard?.workspaceId
+    ? accountTasks.filter((task) => (task.assignedUserIds ?? []).includes(user?.id))
+    : accountTasks;
   const selectedTeamIds = getSelectedValues(boardTeamFilter);
   if (selectedTeamIds.length === 0) {
-    return accountTasks;
+    return boardScopedTasks;
   }
-  return accountTasks.filter((task) => (task.teamIds ?? []).some((teamId) => selectedTeamIds.includes(teamId)));
+  return boardScopedTasks.filter((task) => (task.teamIds ?? []).some((teamId) => selectedTeamIds.includes(teamId)));
 };
 
 
@@ -666,6 +682,23 @@ const getCalendarItems = () => {
 const normalizeEmail = (email) => email.trim().toLowerCase();
 
 const normalizeText = (value) => value.trim();
+const loadUserProfilePreferences = () => JSON.parse(localStorage.getItem("teamio-user-profile-preferences") ?? "{}");
+const saveUserProfilePreferences = (preferences) => {
+  persistAndSync("teamio-user-profile-preferences", JSON.stringify(preferences));
+};
+const getCurrentUserProfilePreference = () => {
+  const user = loadCurrentUser();
+  if (!user?.id) return { personalMode: false, profile: {} };
+  const all = loadUserProfilePreferences();
+  return all[user.id] ?? { personalMode: false, profile: {} };
+};
+const saveCurrentUserProfilePreference = (nextValue) => {
+  const user = loadCurrentUser();
+  if (!user?.id) return;
+  const all = loadUserProfilePreferences();
+  all[user.id] = { ...(all[user.id] ?? {}), ...nextValue };
+  saveUserProfilePreferences(all);
+};
 
 const getInviteTokenFromUrl = () => {
   const params = new URLSearchParams(window.location.search);
@@ -2123,7 +2156,36 @@ const renderMembersInvitesSummary = async () => {
       const joinedAt = member.joinedAt ? new Date(member.joinedAt).toLocaleDateString("bg-BG") : "-";
       item.innerHTML = `<div><strong>${member.name}</strong><div class="panel-list__meta">${member.email} · ${member.role} · ${joinedAt}</div></div>`;
 
-      if (loadCurrentUser()?.id === getCurrentAccount()?.ownerUserId) {
+      if (hasManagementAccess() && normalizeRole(member.role) !== "Owner") {
+        const roleSelect = document.createElement("select");
+        ["Admin", "Manager", "Member", "Viewer"].forEach((roleOption) => {
+          const option = document.createElement("option");
+          option.value = roleOption;
+          option.textContent = roleOption;
+          option.selected = normalizeRole(member.role) === roleOption;
+          roleSelect.append(option);
+        });
+
+        const saveRoleButton = document.createElement("button");
+        saveRoleButton.type = "button";
+        saveRoleButton.className = "ghost";
+        saveRoleButton.textContent = "Запази роля";
+        saveRoleButton.addEventListener("click", async () => {
+          const apiResult = await apiRequest("/api/accounts/members/role", {
+            method: "POST",
+            body: JSON.stringify({
+              memberUserId: member.userId ?? member.id,
+              role: roleSelect.value,
+            }),
+          });
+          if (apiResult?.ok) {
+            setAuthMessage(`Ролята на ${member.email || member.name} е обновена.`);
+            renderMembersInvitesSummary();
+            return;
+          }
+          setAuthMessage(apiResult?.data?.message || "Неуспешна смяна на роля.");
+        });
+
         const removeButton = document.createElement("button");
         removeButton.type = "button";
         removeButton.className = "ghost";
@@ -2163,7 +2225,7 @@ const renderMembersInvitesSummary = async () => {
 
         const actions = document.createElement("div");
         actions.className = "invite-actions";
-        actions.append(removeButton);
+        actions.append(roleSelect, saveRoleButton, removeButton);
         item.append(actions);
       }
 
@@ -3121,6 +3183,39 @@ const updateWorkspaceCompanyIdentity = () => {
   }
 };
 
+const syncProfileSettingsVisibility = () => {
+  const preference = getCurrentUserProfilePreference();
+  const personalMode = Boolean(preference.personalMode);
+  if (profilePersonalModeCheckbox) {
+    profilePersonalModeCheckbox.checked = personalMode;
+  }
+  const companySection = companyProfileForm?.closest(".setting-item");
+  if (companySection) {
+    companySection.hidden = personalMode || !isOwnerOfCurrentAccount();
+  }
+  if (userProfileSetting) {
+    userProfileSetting.hidden = !personalMode;
+  }
+};
+
+const syncUserProfileForm = () => {
+  if (!userProfileForm) return;
+  const preference = getCurrentUserProfilePreference();
+  const profile = preference.profile ?? {};
+  Object.entries({
+    fullName: profile.fullName ?? "",
+    birthDate: profile.birthDate ?? "",
+    city: profile.city ?? "",
+    district: profile.district ?? "",
+    streetAddress: profile.streetAddress ?? "",
+    phone: profile.phone ?? "",
+    jobTitle: profile.jobTitle ?? "",
+    department: profile.department ?? "",
+  }).forEach(([key, value]) => {
+    if (userProfileForm.elements[key]) userProfileForm.elements[key].value = value;
+  });
+};
+
 const syncCompanyProfileForm = async () => {
   if (!companyProfileForm) {
     updateWorkspaceCompanyIdentity();
@@ -3130,18 +3225,16 @@ const syncCompanyProfileForm = async () => {
   const account = getCurrentAccount();
   const currentUser = loadCurrentUser();
   const isOwner = isOwnerOfCurrentAccount();
-  const companySection = companyProfileForm.closest(".setting-item");
-
-  if (!account || !currentUser || !isOwner) {
-    if (companySection) {
-      companySection.hidden = true;
-    }
+  if (!account || !currentUser) {
+    syncProfileSettingsVisibility();
     updateWorkspaceCompanyIdentity();
     return;
   }
 
-  if (companySection) {
-    companySection.hidden = false;
+  if (!isOwner) {
+    syncProfileSettingsVisibility();
+    updateWorkspaceCompanyIdentity();
+    return;
   }
 
   const params = new URLSearchParams({ accountId: account.id, requesterUserId: currentUser.id });
@@ -3176,7 +3269,40 @@ const syncCompanyProfileForm = async () => {
   companyProfileForm.elements.logo.value = "";
 
   updateWorkspaceCompanyIdentity();
+  syncProfileSettingsVisibility();
+  syncUserProfileForm();
 };
+
+profilePersonalModeCheckbox?.addEventListener("change", () => {
+  saveCurrentUserProfilePreference({ personalMode: Boolean(profilePersonalModeCheckbox.checked) });
+  syncProfileSettingsVisibility();
+  syncUserProfileForm();
+});
+
+userProfileForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const formData = new FormData(userProfileForm);
+  const avatarFile = formData.get("avatar");
+  const existing = getCurrentUserProfilePreference().profile ?? {};
+  const avatarDataUrl = avatarFile && typeof avatarFile === "object" && avatarFile.size > 0
+    ? await fileToDataUrl(avatarFile)
+    : (existing.avatarDataUrl ?? "");
+  saveCurrentUserProfilePreference({
+    profile: {
+      fullName: normalizeText(formData.get("fullName")?.toString() ?? ""),
+      birthDate: normalizeText(formData.get("birthDate")?.toString() ?? ""),
+      city: normalizeText(formData.get("city")?.toString() ?? ""),
+      district: normalizeText(formData.get("district")?.toString() ?? ""),
+      streetAddress: normalizeText(formData.get("streetAddress")?.toString() ?? ""),
+      phone: normalizeText(formData.get("phone")?.toString() ?? ""),
+      jobTitle: normalizeText(formData.get("jobTitle")?.toString() ?? ""),
+      department: normalizeText(formData.get("department")?.toString() ?? ""),
+      avatarDataUrl,
+    },
+  });
+  setAuthMessage("Потребителските данни са запазени.");
+  syncUserProfileForm();
+});
 
 companyProfileForm?.addEventListener("submit", async (event) => {
   event.preventDefault();

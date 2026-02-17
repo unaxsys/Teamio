@@ -171,6 +171,7 @@
           </div>
           <div class="header__actions">
             <select id="board-selector" aria-label="Избор на борд"></select>
+            <small id="board-selector-hint" style="color: rgba(255,255,255,0.9);">Личен или фирмен борд</small>
             <button class="ghost" id="create-board">Нов борд</button>
             <button class="ghost" id="new-column">Нова колона</button>
             <button class="primary" id="new-board">Нова задача</button>
@@ -418,6 +419,40 @@
                       <input type="file" name="logo" accept="image/*" />
                     </label>
                     <button type="submit" class="primary">Запази фирмени данни</button>
+                  </form>
+                </div>
+              </section>
+
+              <section class="setting-item setting-item--accordion setting-item--open" data-setting-key="profile-mode">
+                <button type="button" class="setting-item__toggle">
+                  <span>Режим на профил</span>
+                  <span class="setting-item__chevron">▾</span>
+                </button>
+                <div class="setting-item__body">
+                  <label>
+                    <input type="checkbox" id="profile-personal-mode" />
+                    Регистриран съм като потребител (скрий фирмени данни)
+                  </label>
+                </div>
+              </section>
+
+              <section class="setting-item setting-item--accordion" data-setting-key="user-profile" id="user-profile-setting" hidden>
+                <button type="button" class="setting-item__toggle">
+                  <span>Потребителски данни</span>
+                  <span class="setting-item__chevron">▾</span>
+                </button>
+                <div class="setting-item__body">
+                  <form id="user-profile-form" class="stacked-form">
+                    <label>Три имена<input type="text" name="fullName" placeholder="Иван Иванов Иванов" /></label>
+                    <label>Дата на раждане<input type="date" name="birthDate" /></label>
+                    <label>Град<input type="text" name="city" placeholder="София" /></label>
+                    <label>Квартал / ЖК<input type="text" name="district" placeholder="Младост" /></label>
+                    <label>Улица, блок, номер, вход, етаж<input type="text" name="streetAddress" placeholder="ул. Пример 10, бл. 2, вх. А, ет. 3" /></label>
+                    <label>Телефон<input type="tel" name="phone" placeholder="+359..." /></label>
+                    <label>Снимка<input type="file" name="avatar" accept="image/*" /></label>
+                    <label>Длъжност във фирмата<input type="text" name="jobTitle" placeholder="Project Manager" /></label>
+                    <label>Отдел<input type="text" name="department" placeholder="Развой" /></label>
+                    <button type="submit" class="primary">Запази потребителски данни</button>
                   </form>
                 </div>
               </section>
