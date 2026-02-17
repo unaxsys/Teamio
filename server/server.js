@@ -35,6 +35,7 @@ const loadEnvFile = (envFilePath) => {
 };
 
 loadEnvFile(path.join(__dirname, ".env"));
+loadEnvFile(path.join(__dirname, "../.env"));
 loadEnvFile(path.join(process.cwd(), ".env"));
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -264,15 +265,32 @@ const initDb = async () => {
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       tenant_id UUID NOT NULL REFERENCES public.tenants(tenant_id) ON DELETE CASCADE,
       account_id UUID NOT NULL REFERENCES public.accounts(id) ON DELETE CASCADE,
-      role TEXT NOT NULL CHECK (role IN ('OWNER','ADMIN','MANAGER','MEMBER','VIEWER')),
+      role TEXT NOT NULL DEFAULT 'OWNER' CHECK (role IN ('OWNER','ADMIN','MANAGER','MEMBER','VIEWER')),
       status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','REMOVED')),
       joined_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE (tenant_id, account_id)
     );
 
-    CREATE UNIQUE INDEX IF NOT EXISTS uniq_tenant_owner_active
-    ON public.tenant_members(tenant_id)
-    WHERE role = 'OWNER' AND status = 'ACTIVE';
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'tenant_members'
+          AND column_name = 'role'
+      ) AND EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'tenant_members'
+          AND column_name = 'status'
+      ) THEN
+        EXECUTE 'ALTER TABLE public.tenant_members ALTER COLUMN role SET DEFAULT ''OWNER''';
+        EXECUTE 'CREATE UNIQUE INDEX IF NOT EXISTS uniq_tenant_owner_active ON public.tenant_members(tenant_id) WHERE role = ''OWNER'' AND status = ''ACTIVE''';
+      END IF;
+    END
+    $$;
 
     CREATE TABLE IF NOT EXISTS public.tenant_invites (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -304,6 +322,23 @@ const initDb = async () => {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (workspace_id, account_id)
     );
+
+    CREATE OR REPLACE FUNCTION public.sync_workspace_membership_from_tenant_member()
+    RETURNS trigger AS $$
+    BEGIN
+      INSERT INTO public.workspace_memberships (workspace_id, account_id, role, active)
+      VALUES (NEW.tenant_id, NEW.account_id, 'OWNER', true)
+      ON CONFLICT (workspace_id, account_id)
+      DO UPDATE SET active = true;
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    DROP TRIGGER IF EXISTS trg_sync_workspace_membership_from_tenant_member ON public.tenant_members;
+    CREATE TRIGGER trg_sync_workspace_membership_from_tenant_member
+    AFTER INSERT ON public.tenant_members
+    FOR EACH ROW
+    EXECUTE FUNCTION public.sync_workspace_membership_from_tenant_member();
 
     CREATE TABLE IF NOT EXISTS public.workspace_invites (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -465,9 +500,9 @@ const ensureTenantForAccount = async ({ pool, accountId, email }) => {
     }
 
     await client.query(
-      `INSERT INTO public.tenant_members (tenant_id, account_id, role, status)
-       VALUES ($1, $2, 'OWNER', 'ACTIVE')
-       ON CONFLICT (tenant_id, account_id) DO NOTHING`,
+      `INSERT INTO public.tenant_members (tenant_id, account_id)
+       VALUES ($1, $2)
+       ON CONFLICT DO NOTHING`,
       [tenantId, accountId]
     );
 
@@ -645,10 +680,9 @@ const server = createServer(async (req, res) => {
         )
       ).rows[0];
       await client.query(
-        `INSERT INTO public.tenant_members (tenant_id, account_id, role, status)
-         VALUES ($1, $2, 'OWNER', 'ACTIVE')
-         ON CONFLICT (tenant_id, account_id)
-         DO UPDATE SET role = EXCLUDED.role, status = 'ACTIVE'`,
+        `INSERT INTO public.tenant_members (tenant_id, account_id)
+         VALUES ($1, $2)
+         ON CONFLICT DO NOTHING`,
         [tenantId, account.id]
       );
       await client.query("COMMIT");
