@@ -965,7 +965,17 @@ const server = createServer(async (req, res) => {
         return;
       }
 
-      await client.query(`SET LOCAL search_path TO ${quoteIdent(membership.schema_name)}, public`);
+      const schema = membership.schema_name;
+
+      if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(schema)) {
+        await client.query("ROLLBACK");
+        console.error("Invalid schema_name for search_path", { schema });
+        send(res, 500, { message: "Вътрешна грешка." });
+        return;
+      }
+
+      await client.query(`SET LOCAL search_path TO "${schema}", public`);
+
 
       const row = (await client.query(`SELECT payload, updated_at FROM workspace_state WHERE workspace_id = $1`, [workspaceId])).rows[0] ?? null;
 
