@@ -940,25 +940,40 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    const workspaceId = isUuid(workspaceIdParam) ? workspaceIdParam : normalizeText(claims.tenantId);
-    if (!isUuid(workspaceId) || !isUuid(requesterUserId)) {
+    const requestedWorkspaceId = isUuid(workspaceIdParam) ? workspaceIdParam : null;
+    const fallbackWorkspaceId = normalizeText(claims.tenantId);
+    if (!isUuid(requesterUserId) || (requestedWorkspaceId === null && !isUuid(fallbackWorkspaceId))) {
       send(res, 400, { error: "Invalid query" });
       return;
     }
 
     const client = await pool.connect();
+    let membership = null;
     try {
       await client.query("BEGIN");
+      if (requestedWorkspaceId) {
+        const requestedMembershipRes = await client.query(
+          `SELECT wm.workspace_id, wm.account_id, wm.role, wm.active, t.schema_name
+           FROM public.workspace_memberships wm
+           LEFT JOIN public.tenants t ON t.tenant_id = wm.workspace_id
+           WHERE wm.workspace_id = $1 AND wm.account_id = $2 AND wm.active = true
+           LIMIT 1`,
+          [requestedWorkspaceId, requesterUserId]
+        );
+        membership = requestedMembershipRes.rows[0] ?? null;
+      }
 
-      const membershipRes = await client.query(
-        `SELECT wm.workspace_id, wm.account_id, wm.role, wm.active, t.schema_name
-         FROM public.workspace_memberships wm
-         LEFT JOIN public.tenants t ON t.tenant_id = wm.workspace_id
-         WHERE wm.workspace_id = $1 AND wm.account_id = $2 AND wm.active = true
-         LIMIT 1`,
-        [workspaceId, requesterUserId]
-      );
-      const membership = membershipRes.rows[0] ?? null;
+      if (!membership && isUuid(fallbackWorkspaceId)) {
+        const fallbackMembershipRes = await client.query(
+          `SELECT wm.workspace_id, wm.account_id, wm.role, wm.active, t.schema_name
+           FROM public.workspace_memberships wm
+           LEFT JOIN public.tenants t ON t.tenant_id = wm.workspace_id
+           WHERE wm.workspace_id = $1 AND wm.account_id = $2 AND wm.active = true
+           LIMIT 1`,
+          [fallbackWorkspaceId, requesterUserId]
+        );
+        membership = fallbackMembershipRes.rows[0] ?? null;
+      }
 
       if (!membership) {
         await client.query("ROLLBACK");
@@ -974,7 +989,7 @@ const server = createServer(async (req, res) => {
 
       await client.query(`SET LOCAL search_path TO ${quoteIdent(membership.schema_name)}, public`);
 
-      const row = (await client.query(`SELECT payload, updated_at FROM workspace_state WHERE workspace_id = $1`, [workspaceId])).rows[0] ?? null;
+      const row = (await client.query(`SELECT payload, updated_at FROM workspace_state WHERE workspace_id = $1`, [membership.workspace_id])).rows[0] ?? null;
 
       await client.query("COMMIT");
       send(res, 200, row ? { state: row.payload ?? null, updatedAt: Number(row.updated_at) } : { state: null });
@@ -983,7 +998,7 @@ const server = createServer(async (req, res) => {
       console.error("GET /api/workspace-state failed", {
         message: error?.message,
         stack: error?.stack,
-        workspaceId,
+        workspaceId: membership?.workspace_id ?? null,
         workspaceIdParam,
         requesterUserId,
         queryAccountId: normalizeText(requestUrl.searchParams.get("accountId")) || null,
@@ -1149,7 +1164,7 @@ const server = createServer(async (req, res) => {
           await client.query(
             `SELECT id, email, public_id
              FROM public.accounts
-             WHERE public_id = upper($1) OR id::text = $1
+             WHERE upper(public_id) = upper($1) OR id::text = $1
              LIMIT 1`,
             [inviteeUserId]
           )
