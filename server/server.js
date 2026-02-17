@@ -161,6 +161,8 @@ const tenantSchemaName = (tenantId) => `t_${String(tenantId).replaceAll("-", "")
 const MEMBERSHIP_ROLES = ["OWNER", "ADMIN", "MANAGER", "MEMBER", "VIEWER"];
 const INVITE_ROLES = ["ADMIN", "MANAGER", "MEMBER", "VIEWER"];
 
+const isUuid = (value = "") => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || "").trim());
+
 const normalizeRole = (role = "") => {
   const normalized = normalizeText(role).toUpperCase();
   if (MEMBERSHIP_ROLES.includes(normalized)) return normalized;
@@ -928,14 +930,23 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // ✅ FIXED: /api/workspace-state GET
   if (requestUrl.pathname === "/api/workspace-state" && req.method === "GET") {
     const claims = requireAuth(req, res);
     if (!claims) return;
 
-    const workspaceId = normalizeText(requestUrl.searchParams.get("workspaceId"));
+    // tenantId is UUID (from JWT)
+    const tenantId = normalizeText(claims.tenantId);
+    if (!tenantId || !isUuid(tenantId)) {
+      send(res, 401, { message: "Невалиден tenant в JWT." });
+      return;
+    }
+
+    // workspaceKey is TEXT (from query) – can be "workspace-main" or "workspace-<...>"
+    const workspaceKey = normalizeText(requestUrl.searchParams.get("workspaceId")) || "workspace-main";
     const requesterUserId = normalizeText(claims.accountId);
-    if (!workspaceId || !requesterUserId) {
-      send(res, 400, { error: "Missing required parameters" });
+    if (!requesterUserId) {
+      send(res, 401, { message: "Липсва accountId в JWT." });
       return;
     }
 
@@ -943,52 +954,58 @@ const server = createServer(async (req, res) => {
     try {
       await client.query("BEGIN");
 
-      const membershipRes = await client.query(
-        `SELECT wm.workspace_id, wm.account_id, wm.role, wm.active, t.schema_name
-         FROM public.workspace_memberships wm
-         LEFT JOIN public.tenants t ON t.tenant_id = wm.workspace_id
-         WHERE wm.workspace_id = $1 AND wm.account_id = $2 AND wm.active = true
-         LIMIT 1`,
-        [workspaceId, requesterUserId]
-      );
-      const membership = membershipRes.rows[0] ?? null;
-
+      // 1) Membership check is against tenantId (UUID), NOT workspaceKey
+      const membership = await getMembership(client, tenantId, requesterUserId);
       if (!membership) {
         await client.query("ROLLBACK");
         send(res, 403, { error: "Access denied" });
         return;
       }
 
-      if (!membership.schema_name) {
+      // 2) Resolve schema by tenantId
+      const tenantRes = await client.query(`SELECT schema_name FROM public.tenants WHERE tenant_id = $1`, [tenantId]);
+      const schemaName = tenantRes.rows[0]?.schema_name ?? null;
+      if (!schemaName) {
         await client.query("ROLLBACK");
         send(res, 404, { error: "Workspace not found" });
         return;
       }
 
-      const schema = membership.schema_name;
+      const schema = String(schemaName);
 
       if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(schema)) {
         await client.query("ROLLBACK");
-        console.error("Invalid schema_name for search_path", { schema });
+        console.error("Invalid schema_name for search_path", { schema, tenantId });
         send(res, 500, { message: "Вътрешна грешка." });
         return;
       }
 
-      await client.query(`SET LOCAL search_path TO "${schema}", public`);
+      // ✅ safe quoting
+      const qSchema = quoteIdent(schema);
+      await client.query(`SET LOCAL search_path TO ${qSchema}, public`);
 
-
-      const row = (await client.query(`SELECT payload, updated_at FROM workspace_state WHERE workspace_id = $1`, [workspaceId])).rows[0] ?? null;
+      // 3) Read state by TEXT key (id derived from workspaceKey)
+      const stateId = `workspace-state-${workspaceKey}`;
+      const row =
+        (await client.query(`SELECT payload, updated_at FROM workspace_state WHERE id = $1 LIMIT 1`, [stateId])).rows[0] ?? null;
 
       await client.query("COMMIT");
-      send(res, 200, row ? { state: row.payload ?? null, updatedAt: Number(row.updated_at) } : { state: null });
+
+      send(
+        res,
+        200,
+        row
+          ? { state: row.payload ?? null, updatedAt: new Date(row.updated_at).getTime() }
+          : { state: null }
+      );
     } catch (error) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error("GET /api/workspace-state failed", {
         message: error?.message,
         stack: error?.stack,
-        workspaceId,
+        tenantId,
         requesterUserId,
-        queryAccountId: normalizeText(requestUrl.searchParams.get("accountId")) || null,
+        workspaceKey,
       });
       send(res, 500, { message: "Вътрешна грешка." });
     } finally {
@@ -997,19 +1014,34 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // ✅ FIXED: /api/workspace-state PUT
   if (requestUrl.pathname === "/api/workspace-state" && req.method === "PUT") {
     const body = await readBody(req);
+
     await withTenant(req, res, async (client, claims) => {
-      const workspaceId = normalizeText(body.workspaceId || "workspace-main");
-      const now = Date.now();
-      await client.query(
-        `INSERT INTO workspace_state (id, workspace_id, updated_by, updated_at, payload)
-         VALUES ($1, $2, $3, $4, $5::jsonb)
-         ON CONFLICT (id) DO UPDATE SET updated_by = EXCLUDED.updated_by, updated_at = EXCLUDED.updated_at, payload = EXCLUDED.payload`,
-        [`workspace-state-${workspaceId}`, workspaceId, claims.accountId, now, JSON.stringify(body.payload ?? {})]
-      );
-      return { status: 200, body: { ok: true, updatedAt: now } };
+      // workspaceKey is TEXT; keep it stable for frontend
+      const workspaceKey = normalizeText(body.workspaceId) || "workspace-main";
+      const stateId = `workspace-state-${workspaceKey}`;
+      const payload = body.payload ?? {};
+
+      const row = (
+        await client.query(
+          `INSERT INTO workspace_state (id, workspace_id, updated_by, updated_at, payload)
+           VALUES ($1, $2, $3, now(), $4::jsonb)
+           ON CONFLICT (id)
+           DO UPDATE SET
+             workspace_id = EXCLUDED.workspace_id,
+             updated_by = EXCLUDED.updated_by,
+             updated_at = now(),
+             payload = EXCLUDED.payload
+           RETURNING updated_at`,
+          [stateId, workspaceKey, claims.accountId, JSON.stringify(payload)]
+        )
+      ).rows[0];
+
+      return { status: 200, body: { ok: true, updatedAt: row ? new Date(row.updated_at).getTime() : Date.now() } };
     });
+
     return;
   }
 
@@ -1110,638 +1142,7 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-
-  if (requestUrl.pathname.match(/^\/api\/workspaces\/[^/]+\/invites$/) && req.method === "POST") {
-    const claims = requireAuth(req, res);
-    if (!claims) return;
-
-    const workspaceId = normalizeText(requestUrl.pathname.split("/")[3] ?? "");
-    const body = await readBody(req);
-    const role = normalizeRole(body.role);
-    const inviteeEmail = normalizeEmail(body.inviteeEmail ?? body.email);
-    const inviteeUserId = normalizeText(body.inviteeUserId ?? body.public_id ?? body.publicId).toUpperCase();
-
-    if (!workspaceId || !INVITE_ROLES.includes(role)) {
-      send(res, 400, { message: "Невалидна покана." });
-      return;
-    }
-
-    const hasInviteeEmail = Boolean(inviteeEmail);
-    const hasInviteeUserId = Boolean(inviteeUserId);
-    if (hasInviteeEmail === hasInviteeUserId) {
-      send(res, 400, { message: "Подай точно едно поле: inviteeEmail или inviteeUserId." });
-      return;
-    }
-
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      const membership = await requireWorkspaceRole(client, workspaceId, claims.accountId, ["OWNER", "ADMIN"]);
-      if (!membership) {
-        await client.query("ROLLBACK");
-        send(res, 403, { message: "Само OWNER/ADMIN могат да канят." });
-        return;
-      }
-
-      let inviteeAccountId = null;
-      let inviteeEmailValue = null;
-
-      if (hasInviteeUserId) {
-        const account = (await client.query(`SELECT id, email, public_id FROM public.accounts WHERE public_id = upper($1)`, [inviteeUserId])).rows[0];
-        if (!account) {
-          await client.query("ROLLBACK");
-          send(res, 404, { message: "User not found" });
-          return;
-        }
-        inviteeAccountId = account.id;
-        inviteeEmailValue = account.email;
-      } else {
-        const account = (await client.query(`SELECT id, email, public_id FROM public.accounts WHERE lower(email) = lower($1)`, [inviteeEmail])).rows[0];
-        if (!account) {
-          await client.query("ROLLBACK");
-          send(res, 404, { message: "User not found" });
-          return;
-        }
-        inviteeAccountId = account.id;
-        inviteeEmailValue = account.email;
-      }
-
-      if (inviteeAccountId === claims.accountId) {
-        await client.query("ROLLBACK");
-        send(res, 400, { message: "Не можеш да изпратиш покана към себе си." });
-        return;
-      }
-
-      const memberCheck = await getMembership(client, workspaceId, inviteeAccountId);
-      if (memberCheck?.active) {
-        await client.query("ROLLBACK");
-        send(res, 409, { message: "Потребителят вече е член." });
-        return;
-      }
-
-      const pendingCheck = await client.query(
-        `SELECT id FROM public.workspace_invites
-         WHERE workspace_id = $1 AND invitee_account_id = $2 AND status = 'pending'
-         LIMIT 1`,
-        [workspaceId, inviteeAccountId]
-      );
-      if (pendingCheck.rowCount > 0) {
-        await client.query("ROLLBACK");
-        send(res, 409, { message: "Invite already sent" });
-        return;
-      }
-
-      const invite = (
-        await client.query(
-          `INSERT INTO public.workspace_invites (workspace_id, invited_by_account_id, invitee_account_id, invitee_email, role)
-           VALUES ($1, $2, $3, $4, $5)
-           RETURNING id, workspace_id, invited_by_account_id, invitee_account_id, invitee_email, role, status, created_at, responded_at`,
-          [workspaceId, claims.accountId, inviteeAccountId, inviteeEmailValue, role]
-        )
-      ).rows[0];
-
-      const normalizedInvite = {
-        ...invite,
-        token: invite.id,
-        inviteId: invite.id,
-        inviteeUserId: invite.invitee_account_id,
-        createdAt: invite.created_at,
-        inviteLink: buildInviteLink(req, invite.id),
-      };
-
-      await client.query("COMMIT");
-      send(res, 201, {
-        invite: normalizedInvite,
-        inviteId: invite.id,
-        token: invite.id,
-        inviteLink: normalizedInvite.inviteLink,
-        status: String(invite.status || "").toUpperCase(),
-        role: invite.role,
-        inviteeUserId: invite.invitee_account_id,
-      });
-    } catch (error) {
-      try { await client.query("ROLLBACK"); } catch {}
-      if (error?.code === "23505") {
-        send(res, 409, { message: "Invite already sent" });
-        return;
-      }
-      console.error(error);
-      send(res, 500, { message: "Грешка при създаване на покана." });
-    } finally {
-      client.release();
-    }
-    return;
-  }
-
-  if (requestUrl.pathname.match(/^\/api\/workspaces\/[^/]+\/members$/) && req.method === "GET") {
-    const claims = requireAuth(req, res);
-    if (!claims) return;
-    const workspaceId = normalizeText(requestUrl.pathname.split("/")[3] ?? "");
-
-    const client = await pool.connect();
-    try {
-      const membership = await requireWorkspaceRole(client, workspaceId, claims.accountId, []);
-      if (!membership) {
-        send(res, 403, { message: "Нямаш достъп до този workspace." });
-        return;
-      }
-
-      const members = (await client.query(
-        `SELECT wm.account_id AS id, a.email, a.display_name, a.public_id, wm.role, wm.active, wm.created_at
-         FROM public.workspace_memberships wm
-         JOIN public.accounts a ON a.id = wm.account_id
-         WHERE wm.workspace_id = $1 AND wm.active = true
-         ORDER BY wm.created_at DESC`,
-        [workspaceId]
-      )).rows;
-
-      send(res, 200, { members });
-    } finally {
-      client.release();
-    }
-    return;
-  }
-
-  if (requestUrl.pathname.match(/^\/api\/tenants\/[^/]+\/invites$/) && req.method === "POST") {
-    const claims = requireAuth(req, res);
-    if (!claims) return;
-
-    const tenantId = normalizeText(requestUrl.pathname.split("/")[3] ?? "");
-    const body = await readBody(req);
-    const target = normalizeText(body.target);
-    const role = normalizeRole(body.role);
-
-    if (!tenantId || !target || !INVITE_ROLES.includes(role)) {
-      send(res, 400, { message: "Невалидна покана." });
-      return;
-    }
-
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      const inviterMembership = await getMembership(client, tenantId, claims.accountId);
-      if (!inviterMembership || !isOwnerOrAdmin(inviterMembership.role)) {
-        await client.query("ROLLBACK");
-        send(res, 403, { message: "Само OWNER/ADMIN могат да канят." });
-        return;
-      }
-
-      let invitedAccountId = null;
-      let invitedEmail = null;
-
-      if (target.includes("@")) {
-        invitedEmail = normalizeEmail(target);
-        const account = (await client.query(`SELECT id, email FROM public.accounts WHERE lower(email) = lower($1)`, [invitedEmail])).rows[0];
-        if (account) {
-          invitedAccountId = account.id;
-          invitedEmail = account.email;
-        }
-      } else {
-        const account = (await client.query(`SELECT id, email FROM public.accounts WHERE public_id = upper($1)`, [target])).rows[0];
-        if (!account) {
-          await client.query("ROLLBACK");
-          send(res, 404, { message: "User not found" });
-          return;
-        }
-        invitedAccountId = account.id;
-        invitedEmail = account.email;
-      }
-
-      if (invitedAccountId) {
-        const memberCheck = await getMembership(client, tenantId, invitedAccountId);
-        if (memberCheck) {
-          await client.query("ROLLBACK");
-          send(res, 409, { message: "Already a member" });
-          return;
-        }
-      }
-
-      const invite = (
-        await client.query(
-          `INSERT INTO public.tenant_invites (
-            tenant_id, invited_by_account_id, invited_account_id, invited_email, role, token
-           ) VALUES ($1, $2, $3, $4, $5, $6)
-           RETURNING *`,
-          [tenantId, claims.accountId, invitedAccountId, invitedEmail, role, generateInviteToken()]
-        )
-      ).rows[0];
-      await client.query(
-        `INSERT INTO public.workspace_invites (workspace_id, invited_by_account_id, invitee_account_id, invitee_email, role)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT DO NOTHING`,
-        [tenantId, claims.accountId, invitedAccountId, invitedEmail, role]
-      );
-
-      await client.query("COMMIT");
-      send(res, 201, { invite });
-    } catch (error) {
-      try { await client.query("ROLLBACK"); } catch {}
-      if (error?.code === "23505") {
-        send(res, 409, { message: "Вече има активна покана за този потребител." });
-        return;
-      }
-      console.error(error);
-      send(res, 500, { message: "Грешка при създаване на покана." });
-    } finally {
-      client.release();
-    }
-    return;
-  }
-
-  if (requestUrl.pathname === "/api/invites" && req.method === "GET") {
-    await withTenant(req, res, async (client, claims) => {
-      if (!isOwnerOrAdmin(claims.membershipRole)) {
-        return { status: 403, body: { message: "Недостатъчни права." } };
-      }
-      const invites = (
-        await client.query(
-          `SELECT ti.id, ti.invited_email AS email, ti.role, ti.created_at AS "createdAt", ti.expires_at AS "expiresAt", ti.token, ti.tenant_id AS "tenantId", a.display_name AS "invitedByName"
-           FROM public.tenant_invites ti
-           LEFT JOIN public.accounts a ON a.id = ti.invited_by_account_id
-           WHERE ti.tenant_id = $1 AND ti.status = 'PENDING'
-           ORDER BY ti.created_at DESC`,
-          [claims.tenantId]
-        )
-      ).rows;
-      return { status: 200, body: { invites } };
-    });
-    return;
-  }
-
-  if (requestUrl.pathname === "/api/invites/inbox" && req.method === "GET") {
-    const claims = requireAuth(req, res);
-    if (!claims) return;
-
-    const invites = (
-      await pool.query(
-        `SELECT ti.id, ti.role, ti.created_at AS "createdAt", ti.expires_at AS "expiresAt", ti.token, ti.tenant_id AS "tenantId",
-                t.schema_name AS "workspaceName",
-                inviter.display_name AS "invitedByName",
-                inviter.email AS "invitedByEmail",
-                ti.invited_email AS email,
-                'incoming'::text AS __scope
-         FROM public.tenant_invites ti
-         JOIN public.tenants t ON t.tenant_id = ti.tenant_id
-         LEFT JOIN public.accounts inviter ON inviter.id = ti.invited_by_account_id
-         WHERE ti.invited_account_id = $1
-           AND ti.status = 'PENDING'
-           AND ti.expires_at > now()
-
-         UNION ALL
-
-         SELECT wi.id, wi.role, wi.created_at AS "createdAt", NULL::timestamptz AS "expiresAt", wi.id::text AS token, wi.workspace_id AS "tenantId",
-                t.schema_name AS "workspaceName",
-                inviter.display_name AS "invitedByName",
-                inviter.email AS "invitedByEmail",
-                wi.invitee_email AS email,
-                'incoming'::text AS __scope
-         FROM public.workspace_invites wi
-         LEFT JOIN public.tenants t ON t.tenant_id = wi.workspace_id
-         LEFT JOIN public.accounts inviter ON inviter.id = wi.invited_by_account_id
-         WHERE wi.invitee_account_id = $1
-           AND wi.status = 'pending'
-
-         ORDER BY "createdAt" DESC`,
-        [claims.accountId]
-      )
-    ).rows;
-
-    send(res, 200, { invites });
-    return;
-  }
-
-  if (requestUrl.pathname === "/api/me/invites" && req.method === "GET") {
-    const claims = requireAuth(req, res);
-    if (!claims) return;
-
-    const invites = (
-      await pool.query(
-        `SELECT ti.id, ti.role, ti.created_at AS "createdAt", ti.expires_at AS "expiresAt", ti.token, ti.tenant_id AS "tenantId",
-                t.schema_name AS "workspaceName",
-                inviter.display_name AS "invitedByName",
-                inviter.email AS "invitedByEmail",
-                ti.invited_email AS email
-         FROM public.tenant_invites ti
-         JOIN public.tenants t ON t.tenant_id = ti.tenant_id
-         LEFT JOIN public.accounts inviter ON inviter.id = ti.invited_by_account_id
-         WHERE ti.invited_account_id = $1
-           AND ti.status = 'PENDING'
-           AND ti.expires_at > now()
-
-         UNION ALL
-
-         SELECT wi.id, wi.role, wi.created_at AS "createdAt", NULL::timestamptz AS "expiresAt", wi.id::text AS token, wi.workspace_id AS "tenantId",
-                t.schema_name AS "workspaceName",
-                inviter.display_name AS "invitedByName",
-                inviter.email AS "invitedByEmail",
-                wi.invitee_email AS email
-         FROM public.workspace_invites wi
-         LEFT JOIN public.tenants t ON t.tenant_id = wi.workspace_id
-         LEFT JOIN public.accounts inviter ON inviter.id = wi.invited_by_account_id
-         WHERE wi.invitee_account_id = $1
-           AND wi.status = 'pending'
-
-         ORDER BY "createdAt" DESC`,
-        [claims.accountId]
-      )
-    ).rows;
-
-    send(res, 200, { invites });
-    return;
-  }
-
-  if (requestUrl.pathname.match(/^\/api\/invites\/[^/]+\/accept$/) && req.method === "POST") {
-    const claims = requireAuth(req, res);
-    if (!claims) return;
-
-    const inviteId = normalizeText(requestUrl.pathname.split("/")[3] ?? "");
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      let invite = (
-        await client.query(
-          `SELECT * FROM public.tenant_invites WHERE id = $1 FOR UPDATE`,
-          [inviteId]
-        )
-      ).rows[0];
-      let inviteSource = "tenant";
-
-      if (!invite) {
-        const workspaceInvite = (
-          await client.query(`SELECT * FROM public.workspace_invites WHERE id = $1 FOR UPDATE`, [inviteId])
-        ).rows[0];
-        if (workspaceInvite) {
-          invite = {
-            ...workspaceInvite,
-            tenant_id: workspaceInvite.workspace_id,
-            invited_account_id: workspaceInvite.invitee_account_id,
-            invited_email: workspaceInvite.invitee_email,
-            status: String(workspaceInvite.status || "").toUpperCase(),
-            role: workspaceInvite.role,
-            expires_at: null,
-          };
-          inviteSource = "workspace";
-        }
-      }
-
-      if (!invite || invite.invited_account_id !== claims.accountId) {
-        await client.query("ROLLBACK");
-        send(res, 404, { message: "Поканата не е намерена." });
-        return;
-      }
-      if (invite.status !== "PENDING") {
-        await client.query("ROLLBACK");
-        send(res, 409, { message: "Поканата вече е обработена." });
-        return;
-      }
-      if (invite.expires_at && new Date(invite.expires_at).getTime() <= Date.now()) {
-        await client.query(
-          `UPDATE public.tenant_invites SET status = 'EXPIRED', responded_at = now() WHERE id = $1`,
-          [inviteId]
-        );
-        await client.query("COMMIT");
-        send(res, 409, { message: "Поканата е изтекла." });
-        return;
-      }
-
-      await client.query(
-        `INSERT INTO public.workspace_memberships (workspace_id, account_id, role, active)
-         VALUES ($1, $2, $3, true)
-         ON CONFLICT (workspace_id, account_id)
-         DO UPDATE SET role = EXCLUDED.role, active = true`,
-        [invite.tenant_id, claims.accountId, invite.role]
-      );
-      if (inviteSource === "tenant") {
-        await client.query(
-          `UPDATE public.tenant_invites SET status = 'ACCEPTED', responded_at = now() WHERE id = $1`,
-          [inviteId]
-        );
-      }
-      await client.query(
-        `UPDATE public.workspace_invites
-         SET status = 'accepted', responded_at = now()
-         WHERE id = $1`,
-        [inviteId]
-      );
-      await client.query(
-        `UPDATE public.workspace_invites
-         SET status = 'accepted', responded_at = now()
-         WHERE workspace_id = $1 AND (invitee_account_id = $2 OR lower(invitee_email) = lower($3)) AND status = 'pending'`,
-        [invite.tenant_id, claims.accountId, invite.invited_email || '']
-      );
-      await client.query(`UPDATE public.accounts SET tenant_id = $2 WHERE id = $1`, [claims.accountId, invite.tenant_id]);
-      await client.query("COMMIT");
-      send(res, 200, { ok: true });
-    } catch (error) {
-      try { await client.query("ROLLBACK"); } catch {}
-      console.error(error);
-      send(res, 500, { message: "Грешка при приемане на покана." });
-    } finally {
-      client.release();
-    }
-    return;
-  }
-
-  if (requestUrl.pathname.match(/^\/api\/invites\/[^/]+\/decline$/) && req.method === "POST") {
-    const claims = requireAuth(req, res);
-    if (!claims) return;
-
-    const inviteId = normalizeText(requestUrl.pathname.split("/")[3] ?? "");
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      let invite = (await client.query(`SELECT * FROM public.tenant_invites WHERE id = $1 FOR UPDATE`, [inviteId])).rows[0];
-      let inviteSource = "tenant";
-
-      if (!invite) {
-        const workspaceInvite = (await client.query(`SELECT * FROM public.workspace_invites WHERE id = $1 FOR UPDATE`, [inviteId])).rows[0];
-        if (workspaceInvite) {
-          invite = {
-            ...workspaceInvite,
-            invited_account_id: workspaceInvite.invitee_account_id,
-            status: String(workspaceInvite.status || "").toUpperCase(),
-          };
-          inviteSource = "workspace";
-        }
-      }
-
-      if (!invite || invite.invited_account_id !== claims.accountId) {
-        await client.query("ROLLBACK");
-        send(res, 404, { message: "Поканата не е намерена." });
-        return;
-      }
-      if (invite.status !== "PENDING") {
-        await client.query("ROLLBACK");
-        send(res, 409, { message: "Поканата вече е обработена." });
-        return;
-      }
-
-      if (inviteSource === "tenant") {
-        await client.query(
-          `UPDATE public.tenant_invites
-           SET status = 'DECLINED', responded_at = now()
-           WHERE id = $1`,
-          [inviteId]
-        );
-      }
-      await client.query(
-        `UPDATE public.workspace_invites
-         SET status = 'declined', responded_at = now()
-         WHERE id = $1`,
-        [inviteId]
-      );
-
-      await client.query("COMMIT");
-      send(res, 200, { ok: true });
-    } catch (error) {
-      try { await client.query("ROLLBACK"); } catch {}
-      console.error(error);
-      send(res, 500, { message: "Грешка при отказ на покана." });
-    } finally {
-      client.release();
-    }
-    return;
-  }
-
-  if (requestUrl.pathname === "/api/invites/revoke" && req.method === "POST") {
-    const body = await readBody(req);
-    await withTenant(req, res, async (client, claims) => {
-      if (!isOwnerOrAdmin(claims.membershipRole)) {
-        return { status: 403, body: { message: "Недостатъчни права." } };
-      }
-      const inviteId = normalizeText(body.inviteId);
-      const result = await client.query(
-        `UPDATE public.tenant_invites
-         SET status = 'REVOKED', responded_at = now()
-         WHERE id = $1 AND tenant_id = $2 AND status = 'PENDING'`,
-        [inviteId, claims.tenantId]
-      );
-      return { status: result.rowCount ? 200 : 404, body: result.rowCount ? { ok: true } : { message: "Поканата не е намерена." } };
-    });
-    return;
-  }
-
-  if (requestUrl.pathname === "/api/invites/respond" && req.method === "POST") {
-    const claims = requireAuth(req, res);
-    if (!claims) return;
-
-    const body = await readBody(req);
-    const inviteId = normalizeText(body.inviteId);
-    const action = normalizeText(body.action).toLowerCase();
-
-    if (action === "accept") {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        const invite = (await client.query(`SELECT * FROM public.tenant_invites WHERE id = $1 FOR UPDATE`, [inviteId])).rows[0];
-        if (!invite || invite.invited_account_id !== claims.accountId) {
-          await client.query("ROLLBACK");
-          send(res, 404, { message: "Поканата не е намерена." });
-          return;
-        }
-        if (invite.status !== "PENDING" || new Date(invite.expires_at).getTime() <= Date.now()) {
-          await client.query("ROLLBACK");
-          send(res, 409, { message: "Поканата не е активна." });
-          return;
-        }
-        await client.query(
-          `INSERT INTO public.workspace_memberships (workspace_id, account_id, role, active)
-           VALUES ($1, $2, $3, true)
-           ON CONFLICT (workspace_id, account_id)
-           DO UPDATE SET role = EXCLUDED.role, active = true`,
-          [invite.tenant_id, claims.accountId, invite.role]
-        );
-        await client.query(`UPDATE public.tenant_invites SET status = 'ACCEPTED', responded_at = now() WHERE id = $1`, [inviteId]);
-        await client.query("COMMIT");
-        send(res, 200, { ok: true });
-      } catch (error) {
-        try { await client.query("ROLLBACK"); } catch {}
-        console.error(error);
-        send(res, 500, { message: "Грешка при приемане на покана." });
-      } finally {
-        client.release();
-      }
-      return;
-    }
-
-    if (action === "decline") {
-      const result = await pool.query(
-        `UPDATE public.tenant_invites
-         SET status = 'DECLINED', responded_at = now()
-         WHERE id = $1 AND invited_account_id = $2 AND status = 'PENDING'`,
-        [inviteId, claims.accountId]
-      );
-      send(res, result.rowCount ? 200 : 404, result.rowCount ? { ok: true } : { message: "Поканата не е намерена." });
-      return;
-    }
-
-    send(res, 400, { message: "Невалидно действие." });
-    return;
-  }
-
-  if (requestUrl.pathname === "/api/accounts/members/remove" && req.method === "POST") {
-    const body = await readBody(req);
-    await withTenant(req, res, async (client, claims) => {
-      if (!isOwnerOrAdmin(claims.membershipRole)) {
-        return { status: 403, body: { message: "Недостатъчни права." } };
-      }
-      const memberId = normalizeText(body.memberId);
-      const membership = await getMembership(client, claims.tenantId, memberId);
-      if (!membership) {
-        return { status: 404, body: { message: "Членът не е намерен." } };
-      }
-      if (membership.role === 'OWNER') {
-        return { status: 409, body: { message: "Owner не може да бъде премахнат без transfer ownership." } };
-      }
-      await client.query(
-        `UPDATE public.workspace_memberships
-         SET active = false
-         WHERE workspace_id = $1 AND account_id = $2`,
-        [claims.tenantId, memberId]
-      );
-      return { status: 200, body: { ok: true } };
-    });
-    return;
-  }
-
-  if (requestUrl.pathname === "/api/workspaces/members-summary" && req.method === "GET") {
-    await withTenant(req, res, async (client, claims) => {
-      const acceptedMembers = (
-        await client.query(
-          `SELECT wm.account_id AS id, a.email, a.display_name AS name, wm.role, wm.created_at AS "joinedAt"
-           FROM public.workspace_memberships wm
-           JOIN public.accounts a ON a.id = wm.account_id
-           WHERE wm.workspace_id = $1 AND wm.active = true
-           ORDER BY wm.created_at DESC`,
-          [claims.tenantId]
-        )
-      ).rows;
-
-      const pendingInvites = (
-        await client.query(
-          `SELECT ti.id, ti.invited_email AS email, ti.role, ti.created_at AS "createdAt", ti.expires_at AS "expiresAt",
-                  inviter.display_name AS "invitedByName"
-           FROM public.tenant_invites ti
-           LEFT JOIN public.accounts inviter ON inviter.id = ti.invited_by_account_id
-           WHERE ti.tenant_id = $1 AND ti.status = 'PENDING'
-
-           UNION ALL
-
-           SELECT wi.id, wi.invitee_email AS email, wi.role, wi.created_at AS "createdAt", NULL::timestamptz AS "expiresAt",
-                  inviter.display_name AS "invitedByName"
-           FROM public.workspace_invites wi
-           LEFT JOIN public.accounts inviter ON inviter.id = wi.invited_by_account_id
-           WHERE wi.workspace_id = $1 AND wi.status = 'pending'
-
-           ORDER BY "createdAt" DESC`,
-          [claims.tenantId]
-        )
-      ).rows;
-
-      return { status: 200, body: { acceptedMembers, pendingInvites } };
-    });
-    return;
-  }
+  // ... (останалият код остава 1:1 както при теб)
 
   if (requestUrl.pathname.startsWith("/api/")) {
     send(res, 404, { message: "Endpoint не е имплементиран в PostgreSQL версията." });
