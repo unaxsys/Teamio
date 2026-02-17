@@ -79,7 +79,7 @@ const DATABASE_URL = readEnv("DATABASE_URL", "DB_URL", "POSTGRES_URL", "POSTGRES
 const EFFECTIVE_DB_URL = DATABASE_URL || buildConnStringFromParts();
 
 const shouldEnableDbSsl = (value = "") => {
-  const normalized = normalizeText(value).toLowerCase();
+  const normalized = String(value ?? "").trim().toLowerCase();
   if (!normalized) return false;
   if (["1", "true", "yes", "on", "require", "required", "verify-ca", "verify-full"].includes(normalized)) {
     return true;
@@ -91,7 +91,7 @@ const getSslModeFromConnectionString = (connectionString = "") => {
   if (!connectionString) return "";
   try {
     const parsed = new URL(connectionString);
-    return normalizeText(parsed.searchParams.get("sslmode") || parsed.searchParams.get("ssl"));
+    return String(parsed.searchParams.get("sslmode") || parsed.searchParams.get("ssl") || "").trim();
   } catch {
     return "";
   }
