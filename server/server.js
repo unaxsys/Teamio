@@ -130,6 +130,8 @@ const tryRecoverDb = async () => {
   }
 };
 
+tryRecoverDb();
+
 const ensureDb = async (res) => {
   if (pool && dbReady) return true;
   const recovered = await tryRecoverDb();
