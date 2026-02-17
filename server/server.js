@@ -313,6 +313,8 @@ const initDb = async () => {
     ALTER TABLE public.accounts DROP CONSTRAINT IF EXISTS accounts_tenant_id_key;
     ALTER TABLE public.accounts ALTER COLUMN tenant_id DROP NOT NULL;
 
+    ALTER TABLE public.accounts ADD COLUMN IF NOT EXISTS company_profile JSONB NOT NULL DEFAULT '{}'::jsonb;
+
     CREATE TABLE IF NOT EXISTS public.tenant_members (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       tenant_id UUID NOT NULL REFERENCES public.tenants(tenant_id) ON DELETE CASCADE,
@@ -663,7 +665,7 @@ const mapAccountContext = async (client, claims) => {
     createdAt: new Date(tenant.created_at).getTime(),
     workspaces: [
       {
-        id: "workspace-main",
+        id: claims.tenantId,
         name: "Основно пространство",
         description: "Главно работно пространство",
         ownerUserId: owner?.id ?? null,
@@ -673,10 +675,10 @@ const mapAccountContext = async (client, claims) => {
     teams: [],
     members,
     companyProfile: {
-      vatId: "",
-      vatNumber: "",
-      address: "",
-      logoDataUrl: "",
+      vatId: normalizeText(account?.company_profile?.vatId ?? ""),
+      vatNumber: normalizeText(account?.company_profile?.vatNumber ?? ""),
+      address: normalizeText(account?.company_profile?.address ?? ""),
+      logoDataUrl: normalizeText(account?.company_profile?.logoDataUrl ?? ""),
     },
   };
 };
@@ -801,7 +803,7 @@ const server = createServer(async (req, res) => {
         publicId: account.public_id,
         accountId: account.id,
         tenantId,
-        workspaceId: "workspace-main",
+        workspaceId: tenantId,
         role: ensuredRole[0] + ensuredRole.slice(1).toLowerCase(),
         teamIds: [],
       },
@@ -922,9 +924,56 @@ const server = createServer(async (req, res) => {
   if (requestUrl.pathname === "/api/accounts/company-profile" && req.method === "POST") {
     const body = await readBody(req);
     await withTenant(req, res, async (client, claims) => {
-      const profile = body.companyProfile ?? {};
-      await client.query(`UPDATE public.accounts SET display_name = $2 WHERE id = $1`, [claims.accountId, normalizeText(profile.name)]);
-      return { status: 200, body: { ok: true } };
+      const profileInput = body.companyProfile && typeof body.companyProfile === "object" ? body.companyProfile : body;
+      const nextName = normalizeText(profileInput.name);
+      const companyProfile = {
+        vatId: normalizeText(profileInput.vatId),
+        vatNumber: normalizeText(profileInput.vatNumber),
+        address: normalizeText(profileInput.address),
+        logoDataUrl: normalizeText(profileInput.logoDataUrl),
+      };
+
+      await client.query(
+        `UPDATE public.accounts
+         SET display_name = COALESCE(NULLIF($2, ''), display_name),
+             company_profile = $3::jsonb
+         WHERE id = $1`,
+        [claims.accountId, nextName, JSON.stringify(companyProfile)]
+      );
+
+      const account = await mapAccountContext(client, claims);
+      return { status: 200, body: { ok: true, companyProfile: { name: account.name, ...account.companyProfile } } };
+    });
+    return;
+  }
+
+
+  if (requestUrl.pathname === "/api/accounts/company-profile-by-vat" && req.method === "GET") {
+    const vatId = normalizeText(requestUrl.searchParams.get("vatId") ?? "");
+    if (!vatId) {
+      send(res, 400, { message: "Липсва ЕИК." });
+      return;
+    }
+    const result = await pool.query(
+      `SELECT display_name, company_profile
+       FROM public.accounts
+       WHERE company_profile->>'vatId' = $1
+       LIMIT 1`,
+      [vatId]
+    );
+    const row = result.rows[0];
+    if (!row) {
+      send(res, 404, { message: "Няма намерена фирма по този ЕИК." });
+      return;
+    }
+    send(res, 200, {
+      companyProfile: {
+        name: normalizeText(row.display_name ?? ""),
+        vatId,
+        vatNumber: normalizeText(row.company_profile?.vatNumber ?? ""),
+        address: normalizeText(row.company_profile?.address ?? ""),
+        logoDataUrl: normalizeText(row.company_profile?.logoDataUrl ?? ""),
+      },
     });
     return;
   }

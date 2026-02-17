@@ -379,7 +379,22 @@ const loadBoards = () => {
     persistAndSync("teamio-current-board", seeded[0].id);
     return seeded;
   }
-  const normalized = ensureDefaultBoard(boards.map((board) => normalizeBoard(board)));
+  let normalized = ensureDefaultBoard(boards.map((board) => normalizeBoard(board)));
+  if (workspace?.id && !normalized.some((board) => board.workspaceId === workspace.id)) {
+    normalized = [
+      ...normalized,
+      normalizeBoard({
+        id: `board-workspace-${workspace.id}`,
+        name: `${workspace.name || "Workspace"} борд`,
+        createdAt: Date.now(),
+        visibility: "workspace",
+        createdBy: workspace.ownerUserId ?? loadCurrentUser()?.id ?? null,
+        workspaceId: workspace.id,
+        members: [],
+        settings: { allowComments: true, allowAttachments: true, labelsEnabled: true },
+      }),
+    ];
+  }
   persistAndSync("teamio-boards", JSON.stringify(normalized));
   if (!workspace?.id) {
     return normalized;
@@ -435,7 +450,8 @@ const renderBoardSelector = () => {
     boardSelector.append(option);
   });
   if (boardSelectorHint) {
-    boardSelectorHint.textContent = "[Личен] показва само твоите задачи · [Фирмен] показва всички задачи";
+    boardSelectorHint.hidden = true;
+    boardSelectorHint.textContent = "";
   }
 };
 
@@ -3302,6 +3318,27 @@ userProfileForm?.addEventListener("submit", async (event) => {
   });
   setAuthMessage("Потребителските данни са запазени.");
   syncUserProfileForm();
+});
+
+companyProfileForm?.elements?.vatId?.addEventListener("blur", async () => {
+  const vatId = normalizeText(companyProfileForm.elements.vatId.value ?? "");
+  if (!vatId) {
+    return;
+  }
+  const apiResult = await apiRequest(`/api/accounts/company-profile-by-vat?vatId=${encodeURIComponent(vatId)}`);
+  if (!apiResult?.ok || !apiResult.data?.companyProfile) {
+    return;
+  }
+  const profile = apiResult.data.companyProfile;
+  if (!normalizeText(companyProfileForm.elements.name.value)) {
+    companyProfileForm.elements.name.value = profile.name ?? "";
+  }
+  if (!normalizeText(companyProfileForm.elements.vatNumber.value)) {
+    companyProfileForm.elements.vatNumber.value = profile.vatNumber ?? "";
+  }
+  if (!normalizeText(companyProfileForm.elements.address.value)) {
+    companyProfileForm.elements.address.value = profile.address ?? "";
+  }
 });
 
 companyProfileForm?.addEventListener("submit", async (event) => {
