@@ -78,7 +78,37 @@ const buildConnStringFromParts = () => {
 const DATABASE_URL = readEnv("DATABASE_URL", "DB_URL", "POSTGRES_URL", "POSTGRESQL_URL");
 const EFFECTIVE_DB_URL = DATABASE_URL || buildConnStringFromParts();
 
-const pool = EFFECTIVE_DB_URL ? new Pool({ connectionString: EFFECTIVE_DB_URL }) : null;
+const shouldEnableDbSsl = (value = "") => {
+  const normalized = normalizeText(value).toLowerCase();
+  if (!normalized) return false;
+  if (["1", "true", "yes", "on", "require", "required", "verify-ca", "verify-full"].includes(normalized)) {
+    return true;
+  }
+  return false;
+};
+
+const getSslModeFromConnectionString = (connectionString = "") => {
+  if (!connectionString) return "";
+  try {
+    const parsed = new URL(connectionString);
+    return normalizeText(parsed.searchParams.get("sslmode") || parsed.searchParams.get("ssl"));
+  } catch {
+    return "";
+  }
+};
+
+const DB_SSL = readEnv("DB_SSL", "DATABASE_SSL", "PGSSLMODE");
+const SSL_MODE_FROM_URL = getSslModeFromConnectionString(EFFECTIVE_DB_URL);
+const dbSslEnabled = shouldEnableDbSsl(DB_SSL) || shouldEnableDbSsl(SSL_MODE_FROM_URL);
+
+const poolConfig = EFFECTIVE_DB_URL
+  ? {
+      connectionString: EFFECTIVE_DB_URL,
+      ...(dbSslEnabled ? { ssl: { rejectUnauthorized: false } } : {}),
+    }
+  : null;
+
+const pool = poolConfig ? new Pool(poolConfig) : null;
 const dbConfigSource = DATABASE_URL ? "DATABASE_URL" : EFFECTIVE_DB_URL ? "DB_PARTS" : "NONE";
 let dbReady = false;
 let dbInitError = null;
