@@ -932,37 +932,40 @@ const server = createServer(async (req, res) => {
     const claims = requireAuth(req, res);
     if (!claims) return;
 
-    const workspaceId = normalizeText(requestUrl.searchParams.get("workspaceId") ?? "workspace-main");
+    const workspaceId = normalizeText(requestUrl.searchParams.get("workspaceId"));
+    const requesterUserId = normalizeText(claims.accountId);
+    if (!workspaceId || !requesterUserId) {
+      send(res, 400, { error: "Missing required parameters" });
+      return;
+    }
+
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
 
-      const workspaceExistsResult = await client.query(
-        `SELECT 1 FROM public.workspace_memberships WHERE workspace_id = $1 LIMIT 1`,
-        [workspaceId]
+      const membershipRes = await client.query(
+        `SELECT wm.workspace_id, wm.account_id, wm.role, wm.active, t.schema_name
+         FROM public.workspace_memberships wm
+         LEFT JOIN public.tenants t ON t.tenant_id = wm.workspace_id
+         WHERE wm.workspace_id = $1 AND wm.account_id = $2 AND wm.active = true
+         LIMIT 1`,
+        [workspaceId, requesterUserId]
       );
-      if (workspaceExistsResult.rowCount === 0) {
-        await client.query("ROLLBACK");
-        send(res, 404, { error: "Workspace not found" });
-        return;
-      }
+      const membership = membershipRes.rows[0] ?? null;
 
-      const membership = await getMembership(client, workspaceId, claims.accountId);
       if (!membership) {
         await client.query("ROLLBACK");
         send(res, 403, { error: "Access denied" });
         return;
       }
 
-      const tenantRes = await client.query(`SELECT schema_name FROM public.tenants WHERE tenant_id = $1`, [workspaceId]);
-      const tenant = tenantRes.rows[0] ?? null;
-      if (!tenant?.schema_name) {
+      if (!membership.schema_name) {
         await client.query("ROLLBACK");
         send(res, 404, { error: "Workspace not found" });
         return;
       }
 
-      await client.query(`SET LOCAL search_path TO ${quoteIdent(tenant.schema_name)}, public`);
+      await client.query(`SET LOCAL search_path TO ${quoteIdent(membership.schema_name)}, public`);
 
       const row = (await client.query(`SELECT payload, updated_at FROM workspace_state WHERE workspace_id = $1`, [workspaceId])).rows[0] ?? null;
 
@@ -970,7 +973,13 @@ const server = createServer(async (req, res) => {
       send(res, 200, row ? { state: row.payload ?? null, updatedAt: Number(row.updated_at) } : { state: null });
     } catch (error) {
       try { await client.query("ROLLBACK"); } catch {}
-      console.error(error);
+      console.error("GET /api/workspace-state failed", {
+        message: error?.message,
+        stack: error?.stack,
+        workspaceId,
+        requesterUserId,
+        queryAccountId: normalizeText(requestUrl.searchParams.get("accountId")) || null,
+      });
       send(res, 500, { message: "Вътрешна грешка." });
     } finally {
       client.release();
