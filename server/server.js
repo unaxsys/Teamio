@@ -1075,6 +1075,83 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+
+  if (requestUrl.pathname === "/api/boards" && req.method === "GET") {
+    await withTenant(req, res, async (client) => {
+      const boards = (
+        await client.query(
+          `SELECT id, name, created_at
+           FROM boards
+           ORDER BY created_at ASC`
+        )
+      ).rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        createdAt: new Date(row.created_at).getTime(),
+      }));
+      return { status: 200, body: { boards } };
+    });
+    return;
+  }
+
+  if (requestUrl.pathname.match(/^\/api\/boards\/[^/]+\/columns$/) && req.method === "GET") {
+    const boardId = normalizeText(requestUrl.pathname.split("/")[3] ?? "");
+    await withTenant(req, res, async (client) => {
+      const columns = (
+        await client.query(
+          `SELECT id, board_id AS "boardId", name, position, wip_limit AS "wipLimit"
+           FROM columns
+           WHERE board_id = $1
+           ORDER BY position ASC, created_at ASC`,
+          [boardId]
+        )
+      ).rows;
+      return { status: 200, body: { columns } };
+    });
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/tasks" && req.method === "GET") {
+    const boardId = normalizeText(requestUrl.searchParams.get("boardId") ?? "");
+    const assignee = normalizeText(requestUrl.searchParams.get("assignee") ?? "");
+    await withTenant(req, res, async (client, claims) => {
+      try {
+        await client.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_id UUID`);
+      } catch {}
+
+      if (assignee === "me") {
+        const tasks = (
+          await client.query(
+            `SELECT id, board_id AS "boardId", column_id AS "column", column_id AS "listId", title, description,
+                    due_date AS due, created_at AS "createdAt", assignee_id AS "assigneeId"
+             FROM tasks
+             WHERE assignee_id = $1
+             ORDER BY created_at ASC`,
+            [claims.accountId]
+          )
+        ).rows;
+        return { status: 200, body: { tasks } };
+      }
+
+      if (!boardId) {
+        return { status: 400, body: { message: "Липсва boardId." } };
+      }
+
+      const tasks = (
+        await client.query(
+          `SELECT id, board_id AS "boardId", column_id AS "column", column_id AS "listId", title, description,
+                  due_date AS due, created_at AS "createdAt", assignee_id AS "assigneeId"
+           FROM tasks
+           WHERE board_id = $1
+           ORDER BY created_at ASC`,
+          [boardId]
+        )
+      ).rows;
+      return { status: 200, body: { tasks } };
+    });
+    return;
+  }
+
   if (requestUrl.pathname === "/api/cards" && req.method === "POST") {
     const body = await readBody(req);
     await withTenant(req, res, async (client, claims) => {
@@ -1096,10 +1173,13 @@ const server = createServer(async (req, res) => {
         createdAt: new Date(),
       };
 
+      try {
+        await client.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_id UUID`);
+      } catch {}
       await client.query(
-        `INSERT INTO tasks (id, board_id, column_id, title, description, due_date)
-         VALUES ($1,$2,$3,$4,$5,$6::date)`,
-        [card.id, card.boardId, card.listId, card.title, card.description || null, card.due || null]
+        `INSERT INTO tasks (id, board_id, column_id, title, description, due_date, assignee_id)
+         VALUES ($1,$2,$3,$4,$5,$6::date,$7)`,
+        [card.id, card.boardId, card.listId, card.title, card.description || null, card.due || null, normalizeText(body.assigneeId) || null]
       );
 
       return { status: 201, body: { card } };
@@ -1128,9 +1208,25 @@ const server = createServer(async (req, res) => {
         listId: normalizeText(body.listId ?? found.column_id),
       };
 
+      try {
+        await client.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_id UUID`);
+      } catch {}
       await client.query(
-        `UPDATE tasks SET title = $2, description = $3, due_date = $4::date, column_id = $5 WHERE id = $1`,
-        [cardId, next.title, next.description || null, next.due || null, next.listId]
+        `UPDATE tasks
+         SET title = $2,
+             description = $3,
+             due_date = $4::date,
+             column_id = $5,
+             assignee_id = COALESCE(NULLIF($6, ''), assignee_id)
+         WHERE id = $1`,
+        [
+          cardId,
+          next.title,
+          next.description || null,
+          next.due || null,
+          next.listId,
+          normalizeText(body.assigneeId || body.assignedUserId || ""),
+        ]
       );
 
       return {

@@ -621,6 +621,45 @@ const syncCurrentAccountFromApi = async (user) => {
   }
 };
 
+const syncBoardsFromApi = async () => {
+  const apiResult = await apiRequest("/api/boards");
+  if (!apiResult?.ok || !Array.isArray(apiResult.data?.boards)) {
+    return;
+  }
+  const workspace = getCurrentWorkspace();
+  const currentUser = loadCurrentUser();
+  const remoteBoards = apiResult.data.boards.map((board) =>
+    normalizeBoard({
+      id: board.id,
+      name: board.name,
+      createdAt: board.createdAt,
+      visibility: "workspace",
+      workspaceId: workspace?.id ?? null,
+      createdBy: currentUser?.id ?? null,
+      members: [],
+      settings: { allowComments: true, allowAttachments: true, labelsEnabled: true },
+    })
+  );
+  const localBoards = loadBoards().filter((board) => !board.workspaceId);
+  saveBoards([...localBoards, ...remoteBoards]);
+};
+
+const ensureWorkspaceMembersLoaded = async () => {
+  if (Array.isArray(workspaceMembersCache) && workspaceMembersCache.length > 0) {
+    return;
+  }
+  const user = loadCurrentUser();
+  if (!user?.accountId || !user?.id) {
+    return;
+  }
+  const params = new URLSearchParams({ accountId: user.accountId, requesterUserId: user.id });
+  const apiResult = await apiRequest(`/api/workspaces/members-summary?${params.toString()}`);
+  if (apiResult?.ok && Array.isArray(apiResult.data?.acceptedMembers)) {
+    workspaceMembersCache = apiResult.data.acceptedMembers;
+    workspaceMembersCountCache = Math.max(workspaceMembersCache.length, 1);
+  }
+};
+
 const getCurrentAccount = () => {
   const user = loadCurrentUser();
   if (!user?.accountId) {
@@ -1378,6 +1417,7 @@ const updateProfile = (user) => {
 const showApp = async (user) => {
   await syncCurrentAccountFromApi(user);
   const normalizedUser = ensureAccountForUser(user);
+  await syncBoardsFromApi();
   normalizeInviteFormFields();
   await pullWorkspaceState({ force: true });
   authScreenEl.style.display = "none";
@@ -1742,13 +1782,14 @@ const closeTaskModal = () => {
   formEl.reset();
 };
 
-const openTaskDetails = (taskId) => {
+const openTaskDetails = async (taskId) => {
   const tasks = loadTasks();
   const task = tasks.find((entry) => entry.id === taskId);
   if (!task || !taskDetailsForm) {
     return;
   }
 
+  await ensureWorkspaceMembersLoaded();
   taskDetailsForm.querySelector('input[name="taskId"]').value = task.id;
   taskDetailsForm.querySelector('input[name="title"]').value = task.title;
   taskDetailsForm.querySelector('textarea[name="description"]').value = task.description ?? "";
@@ -1821,8 +1862,8 @@ const createCard = (task, columnColor) => {
     event.dataTransfer.setData("text/plain", task.id);
   });
 
-  card.addEventListener("click", () => {
-    openTaskDetails(task.id);
+  card.addEventListener("click", async () => {
+    await openTaskDetails(task.id);
   });
   if (!canEditTask(task)) {
     card.classList.add("card--readonly");
@@ -2395,6 +2436,7 @@ const renderMyInvites = () => {
           setCurrentBoardId(inviteWorkspaceBoard.id);
         }
 
+        await syncBoardsFromApi();
         renderBoardSelector();
         renderInvites();
         renderMyInvites();
