@@ -3490,25 +3490,32 @@ inviteForm?.addEventListener("submit", async (event) => {
     return;
   }
   const formData = new FormData(inviteForm);
-  const inviteTarget = normalizeText(formData.get("inviteTarget")?.toString() ?? "");
-  const explicitUserId = normalizeText(formData.get("invitedUserId")?.toString() ?? "");
-  const targetLooksLikeEmail = inviteTarget.includes("@");
-  const inviteeEmail = targetLooksLikeEmail ? normalizeEmail(inviteTarget) : "";
-  const inviteeUserId = (explicitUserId || (!targetLooksLikeEmail ? inviteTarget : "")).toUpperCase();
-  const hasInviteeEmail = Boolean(inviteeEmail);
-  const hasInviteeUserId = Boolean(inviteeUserId);
-  const inviteTargetLabel = inviteeUserId || inviteeEmail || inviteTarget;
+  const inviteeEmailRaw = normalizeText(formData.get("inviteEmail")?.toString() ?? "");
+  const inviteeUserIdRaw = normalizeText(formData.get("invitedUserId")?.toString() ?? "");
+  const inviteeEmail = inviteeEmailRaw ? normalizeEmail(inviteeEmailRaw) : "";
+  const inviteeUserId = inviteeUserIdRaw.toUpperCase();
+  const hasInviteeEmail = Boolean(inviteeEmailRaw);
+  const hasInviteeUserId = Boolean(inviteeUserIdRaw);
+  const inviteTargetLabel = inviteeUserId || inviteeEmail || inviteeUserIdRaw || inviteeEmailRaw;
   const role = normalizeRole(formData.get("role")?.toString() ?? "Member");
   if (!canInviteRole(role)) {
     setAuthMessage("Можеш да каниш само с роля по-ниска от твоята.");
     return;
   }
   const account = getCurrentAccount();
-  if (!account || !inviteTarget) {
+  if (!account) {
     return;
   }
-  if (hasInviteeEmail === hasInviteeUserId) {
-    setAuthMessage("Попълни точно едно поле: имейл или потребителско ID.");
+  if (!hasInviteeEmail && !hasInviteeUserId) {
+    setAuthMessage("Попълнете имейл или потребителско ID.");
+    return;
+  }
+  if (hasInviteeEmail && hasInviteeUserId) {
+    setAuthMessage("Попълнете само едно поле: имейл ИЛИ потребителско ID.");
+    return;
+  }
+  if (hasInviteeEmail && !inviteeEmail) {
+    setAuthMessage("Невалиден имейл адрес.");
     return;
   }
 
@@ -3517,7 +3524,7 @@ inviteForm?.addEventListener("submit", async (event) => {
     id: `invite-${Date.now()}`,
     accountId: account.id,
     invitedByUserId: loadCurrentUser()?.id ?? null,
-    email: inviteeEmail || "",
+    email: hasInviteeEmail ? inviteeEmail : "",
     role,
     token: localToken,
     expiresAt: Date.now() + 48 * 60 * 60 * 1000,

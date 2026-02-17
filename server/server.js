@@ -157,6 +157,7 @@ const quoteIdent = (name) => `"${String(name).replace(/"/g, '""')}"`;
 const hashPassword = (password) => createHash("sha256").update(password).digest("hex");
 const normalizeText = (value = "") => String(value).trim();
 const normalizeEmail = (email = "") => normalizeText(email).toLowerCase();
+const isUuid = (value = "") => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(normalizeText(value));
 const tenantSchemaName = (tenantId) => `t_${String(tenantId).replaceAll("-", "")}`;
 const MEMBERSHIP_ROLES = ["OWNER", "ADMIN", "MANAGER", "MEMBER", "VIEWER"];
 const INVITE_ROLES = ["ADMIN", "MANAGER", "MEMBER", "VIEWER"];
@@ -929,11 +930,68 @@ const server = createServer(async (req, res) => {
   }
 
   if (requestUrl.pathname === "/api/workspace-state" && req.method === "GET") {
-    await withTenant(req, res, async (client) => {
-      const workspaceId = normalizeText(requestUrl.searchParams.get("workspaceId") ?? "workspace-main");
-      const row = (await client.query(`SELECT * FROM workspace_state WHERE workspace_id = $1`, [workspaceId])).rows[0] ?? null;
-      return { status: 200, body: row ? { state: row.payload, updatedAt: Number(row.updated_at) } : { state: null } };
-    });
+    const claims = requireAuth(req, res);
+    if (!claims) return;
+
+    const workspaceIdParam = normalizeText(requestUrl.searchParams.get("workspaceId"));
+    const requesterUserId = normalizeText(claims.accountId);
+    if (!workspaceIdParam || !requesterUserId) {
+      send(res, 400, { error: "Missing required parameters" });
+      return;
+    }
+
+    const workspaceId = isUuid(workspaceIdParam) ? workspaceIdParam : normalizeText(claims.tenantId);
+    if (!isUuid(workspaceId) || !isUuid(requesterUserId)) {
+      send(res, 400, { error: "Invalid query" });
+      return;
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const membershipRes = await client.query(
+        `SELECT wm.workspace_id, wm.account_id, wm.role, wm.active, t.schema_name
+         FROM public.workspace_memberships wm
+         LEFT JOIN public.tenants t ON t.tenant_id = wm.workspace_id
+         WHERE wm.workspace_id = $1 AND wm.account_id = $2 AND wm.active = true
+         LIMIT 1`,
+        [workspaceId, requesterUserId]
+      );
+      const membership = membershipRes.rows[0] ?? null;
+
+      if (!membership) {
+        await client.query("ROLLBACK");
+        send(res, 403, { error: "Access denied" });
+        return;
+      }
+
+      if (!membership.schema_name) {
+        await client.query("ROLLBACK");
+        send(res, 404, { error: "Workspace not found" });
+        return;
+      }
+
+      await client.query(`SET LOCAL search_path TO ${quoteIdent(membership.schema_name)}, public`);
+
+      const row = (await client.query(`SELECT payload, updated_at FROM workspace_state WHERE workspace_id = $1`, [workspaceId])).rows[0] ?? null;
+
+      await client.query("COMMIT");
+      send(res, 200, row ? { state: row.payload ?? null, updatedAt: Number(row.updated_at) } : { state: null });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("GET /api/workspace-state failed", {
+        message: error?.message,
+        stack: error?.stack,
+        workspaceId,
+        workspaceIdParam,
+        requesterUserId,
+        queryAccountId: normalizeText(requestUrl.searchParams.get("accountId")) || null,
+      });
+      send(res, 500, { message: "Вътрешна грешка." });
+    } finally {
+      client.release();
+    }
     return;
   }
 
@@ -1059,7 +1117,7 @@ const server = createServer(async (req, res) => {
     const body = await readBody(req);
     const role = normalizeRole(body.role);
     const inviteeEmail = normalizeEmail(body.inviteeEmail ?? body.email);
-    const inviteeUserId = normalizeText(body.inviteeUserId ?? body.public_id ?? body.publicId).toUpperCase();
+    const inviteeUserId = normalizeText(body.inviteeUserId ?? body.public_id ?? body.publicId);
 
     if (!workspaceId || !INVITE_ROLES.includes(role)) {
       send(res, 400, { message: "Невалидна покана." });
@@ -1087,7 +1145,15 @@ const server = createServer(async (req, res) => {
       let inviteeEmailValue = null;
 
       if (hasInviteeUserId) {
-        const account = (await client.query(`SELECT id, email, public_id FROM public.accounts WHERE public_id = upper($1)`, [inviteeUserId])).rows[0];
+        const account = (
+          await client.query(
+            `SELECT id, email, public_id
+             FROM public.accounts
+             WHERE public_id = upper($1) OR id::text = $1
+             LIMIT 1`,
+            [inviteeUserId]
+          )
+        ).rows[0];
         if (!account) {
           await client.query("ROLLBACK");
           send(res, 404, { message: "User not found" });
@@ -1153,6 +1219,7 @@ const server = createServer(async (req, res) => {
       send(res, 201, {
         invite: normalizedInvite,
         inviteId: invite.id,
+        token: invite.id,
         inviteLink: normalizedInvite.inviteLink,
         status: String(invite.status || "").toUpperCase(),
         role: invite.role,
