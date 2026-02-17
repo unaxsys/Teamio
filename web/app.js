@@ -147,11 +147,6 @@ const WORKSPACE_ROLES = ["Owner", "Admin", "Manager", "Member", "Viewer"];
 const CARD_PRIORITIES = ["low", "medium", "high", "urgent"];
 const CARD_STATUSES = ["todo", "in_progress", "review", "done"];
 const SYNC_STORAGE_KEYS = [
-  "teamio-boards",
-  "teamio-current-board",
-  "teamio-columns",
-  "teamio-tasks",
-  "teamio-calendar",
   "teamio-preferences",
   "teamio-theme",
   "teamio-density",
@@ -396,34 +391,6 @@ const loadBoards = () => {
     ];
   }
 
-  if (workspace?.id) {
-    const user = loadCurrentUser();
-    const rawTasks = JSON.parse(localStorage.getItem("teamio-tasks") ?? "[]");
-    const knownBoardIds = new Set(normalized.map((board) => board.id));
-    const missingWorkspaceBoardIds = Array.from(
-      new Set(
-        rawTasks
-          .filter((task) => (!user?.accountId || task.accountId === user.accountId) && task.boardId && task.boardId !== "board-default")
-          .map((task) => task.boardId)
-          .filter((boardId) => !knownBoardIds.has(boardId))
-      )
-    );
-    if (missingWorkspaceBoardIds.length > 0) {
-      const generated = missingWorkspaceBoardIds.map((boardId, index) =>
-        normalizeBoard({
-          id: boardId,
-          name: `Фирмен борд ${index + 1}`,
-          createdAt: Date.now(),
-          visibility: "workspace",
-          createdBy: workspace.ownerUserId ?? user?.id ?? null,
-          workspaceId: workspace.id,
-          members: [],
-          settings: { allowComments: true, allowAttachments: true, labelsEnabled: true },
-        })
-      );
-      normalized = [...normalized, ...generated];
-    }
-  }
   persistAndSync("teamio-boards", JSON.stringify(normalized));
   if (!workspace?.id) {
     return normalized;
@@ -433,16 +400,8 @@ const loadBoards = () => {
 };
 
 const saveBoards = (boards) => {
-  const workspace = getCurrentWorkspace();
-  const existing = JSON.parse(localStorage.getItem("teamio-boards") ?? "[]");
   const safeBoards = ensureDefaultBoard(boards.map((board) => normalizeBoard(board)));
-  if (!workspace?.id || !Array.isArray(existing)) {
-    persistAndSync("teamio-boards", JSON.stringify(safeBoards));
-    return;
-  }
-  const safeBoardIds = new Set(safeBoards.map((board) => board.id));
-  const preserved = existing.filter((board) => board.workspaceId && board.workspaceId !== workspace.id && !safeBoardIds.has(board.id));
-  persistAndSync("teamio-boards", JSON.stringify([...preserved, ...safeBoards]));
+  persistAndSync("teamio-boards", JSON.stringify(safeBoards));
 };
 
 const getCurrentBoardId = () => {
@@ -640,8 +599,60 @@ const syncBoardsFromApi = async () => {
       settings: { allowComments: true, allowAttachments: true, labelsEnabled: true },
     })
   );
-  const localBoards = loadBoards().filter((board) => !board.workspaceId);
-  saveBoards([...localBoards, ...remoteBoards]);
+  saveBoards(remoteBoards);
+};
+
+const syncColumnsFromApi = async (boardId) => {
+  const targetBoardId = normalizeText(boardId ?? getCurrentBoardId());
+  if (!targetBoardId) {
+    return;
+  }
+  const apiResult = await apiRequest(`/api/boards/${targetBoardId}/columns`);
+  if (!apiResult?.ok || !Array.isArray(apiResult.data?.columns)) {
+    return;
+  }
+  const remoteColumns = apiResult.data.columns.map((column) => ({
+    id: column.id,
+    title: column.name,
+    color: "#5b6bff",
+    boardId: targetBoardId,
+    wipLimit: column.wipLimit ?? null,
+  }));
+  const otherColumns = loadAllColumns().filter((column) => column.boardId !== targetBoardId);
+  saveAllColumns([...otherColumns, ...remoteColumns]);
+};
+
+const syncTasksFromApi = async (boardId) => {
+  const targetBoardId = normalizeText(boardId ?? getCurrentBoardId());
+  if (!targetBoardId) {
+    return;
+  }
+  const apiResult = await apiRequest(`/api/tasks?boardId=${encodeURIComponent(targetBoardId)}`);
+  if (!apiResult?.ok || !Array.isArray(apiResult.data?.tasks)) {
+    return;
+  }
+  const remoteTasks = apiResult.data.tasks.map((task) => ({
+    id: task.id,
+    boardId: task.boardId ?? targetBoardId,
+    column: task.column,
+    listId: task.listId ?? task.column,
+    title: task.title,
+    description: task.description ?? "",
+    due: task.due ?? "",
+    createdAt: task.createdAt ?? Date.now(),
+    level: "L2",
+    completed: false,
+    status: "todo",
+    priority: "medium",
+    assignedUserIds: task.assigneeId ? [task.assigneeId] : [],
+    labels: [],
+    checklists: [],
+    attachments: [],
+    comments: [],
+    activityLog: [],
+  }));
+  const otherTasks = loadAllTasks().filter((task) => task.boardId !== targetBoardId);
+  saveTasks([...otherTasks, ...remoteTasks]);
 };
 
 const ensureWorkspaceMembersLoaded = async () => {
@@ -1420,6 +1431,8 @@ const showApp = async (user) => {
   await syncBoardsFromApi();
   normalizeInviteFormFields();
   await pullWorkspaceState({ force: true });
+  await syncColumnsFromApi();
+  await syncTasksFromApi();
   authScreenEl.style.display = "none";
   appEl.classList.remove("app--hidden");
   updateProfile(normalizedUser);
@@ -2437,6 +2450,8 @@ const renderMyInvites = () => {
         }
 
         await syncBoardsFromApi();
+        await syncColumnsFromApi();
+        await syncTasksFromApi();
         renderBoardSelector();
         renderInvites();
         renderMyInvites();
@@ -3583,8 +3598,10 @@ densityButtons.forEach((button) => {
   });
 });
 
-boardSelector?.addEventListener("change", () => {
+boardSelector?.addEventListener("change", async () => {
   setCurrentBoardId(boardSelector.value);
+  await syncColumnsFromApi();
+  await syncTasksFromApi();
   applyManagementAccessUi();
   renderBoardSelector();
   renderBoard(getVisibleTasks());
