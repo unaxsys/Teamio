@@ -416,67 +416,73 @@ const createTenantSchema = async (client, tenantId, schemaName, owner) => {
   );
 };
 
-const ensureTenantForAccount = async (client, accountId, email) => {
-  const account = (
-    await client.query(
-      `SELECT id, email, display_name
-       FROM public.accounts
-       WHERE id = $1
-       FOR UPDATE`,
-      [accountId]
-    )
-  ).rows[0];
+const ensureTenantForAccount = async ({ pool, accountId, email }) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
 
-  if (!account) {
-    throw new Error(`Account not found: ${accountId}`);
-  }
-
-  const existingTenant = (
-    await client.query(
-      `SELECT tm.tenant_id
-       FROM public.tenant_members tm
-       WHERE tm.account_id = $1
+    const existing = await client.query(
+      `SELECT tenant_id
+       FROM public.tenant_members
+       WHERE account_id = $1
        LIMIT 1`,
       [accountId]
-    )
-  ).rows[0];
+    );
 
-  if (existingTenant?.tenant_id) {
-    return existingTenant.tenant_id;
-  }
-
-  const baseSchemaName = buildTenantSchemaSlugFromEmail(email || account.email);
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const tenantId = randomUUID();
-    const suffix = attempt === 0 ? "" : `-${attempt + 1}`;
-    const schemaName = `${baseSchemaName}${suffix}`;
-    const savepointName = `sp_ensure_tenant_${attempt}`;
-    await client.query(`SAVEPOINT ${savepointName}`);
-    try {
-      await createTenantSchema(client, tenantId, schemaName, { name: account.display_name, email: account.email });
-      await client.query(
-        `INSERT INTO public.tenant_members (tenant_id, account_id, role, status)
-         VALUES ($1, $2, 'OWNER', 'ACTIVE')
-         ON CONFLICT (tenant_id, account_id) DO NOTHING`,
-        [tenantId, accountId]
-      );
-      await client.query(`RELEASE SAVEPOINT ${savepointName}`);
-      return tenantId;
-    } catch (error) {
-      await client.query(`ROLLBACK TO SAVEPOINT ${savepointName}`);
-      await client.query(`RELEASE SAVEPOINT ${savepointName}`);
-      if (error?.code === "23505" && error?.constraint === "tenants_schema_name_key") {
-        continue;
-      }
-      throw error;
+    if (existing.rowCount > 0) {
+      await client.query("COMMIT");
+      return existing.rows[0].tenant_id;
     }
-  }
 
-  throw new Error(`Failed to allocate tenant schema_name for account: ${accountId}`);
+    let ensuredEmail = normalizeEmail(email);
+    if (!ensuredEmail) {
+      const accountRes = await client.query(`SELECT email FROM public.accounts WHERE id = $1`, [accountId]);
+      ensuredEmail = normalizeEmail(accountRes.rows[0]?.email);
+    }
+
+    const base = buildTenantSchemaSlugFromEmail(ensuredEmail);
+    let tenantId = null;
+
+    for (let i = 0; i < 5; i += 1) {
+      const schemaName = i === 0 ? base : `${base}_${i + 1}`;
+      try {
+        const insTenant = await client.query(
+          `INSERT INTO public.tenants (tenant_id, schema_name)
+           VALUES (gen_random_uuid(), $1)
+           RETURNING tenant_id`,
+          [schemaName]
+        );
+        tenantId = insTenant.rows[0].tenant_id;
+        break;
+      } catch (error) {
+        if (error?.code === "23505") continue;
+        throw error;
+      }
+    }
+
+    if (!tenantId) {
+      throw new Error("Failed to create tenant (schema_name conflicts)");
+    }
+
+    await client.query(
+      `INSERT INTO public.tenant_members (tenant_id, account_id, role, status)
+       VALUES ($1, $2, 'OWNER', 'ACTIVE')
+       ON CONFLICT (tenant_id, account_id) DO NOTHING`,
+      [tenantId, accountId]
+    );
+
+    await client.query("COMMIT");
+    return tenantId;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 };
 
 const ensureTenantAndMembership = async (client, accountId, email) => {
-  const tenantId = await ensureTenantForAccount(client, accountId, email);
+  const tenantId = await ensureTenantForAccount({ pool, accountId, email });
   const membership = await getDefaultActiveMembership(client, accountId);
   const selectedTenantId = membership?.workspace_id ?? tenantId;
   const selectedRole = membership?.role ?? "OWNER";
@@ -674,22 +680,32 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    const client = await pool.connect();
-    let ensuredAccess;
+    let tenantId;
+    console.log(`ensureTenantForAccount start accountId=${account.id}`);
     try {
-      await client.query("BEGIN");
-      ensuredAccess = await ensureTenantAndMembership(client, account.id, account.email);
-      await client.query("COMMIT");
+      tenantId = await ensureTenantForAccount({ pool, accountId: account.id, email: account.email });
+      console.log(`ensureTenantForAccount result tenantId=${tenantId}`);
     } catch (error) {
-      try { await client.query("ROLLBACK"); } catch {}
-      console.error(error);
+      console.error("ensureTenantForAccount error", error);
       send(res, 500, { message: "Грешка при осигуряване на workspace достъп." });
       return;
-    } finally {
-      client.release();
     }
 
-    const token = signAuthToken(account.id, ensuredAccess.tenantId);
+    let ensuredRole = "OWNER";
+    const roleRes = await pool.query(
+      `SELECT role, active
+       FROM public.workspace_memberships
+       WHERE workspace_id = $1 AND account_id = $2
+       LIMIT 1`,
+      [tenantId, account.id]
+    );
+    if (roleRes.rowCount > 0 && roleRes.rows[0].active) {
+      ensuredRole = normalizeRole(roleRes.rows[0].role);
+    }
+
+    await pool.query(`UPDATE public.accounts SET tenant_id = $2 WHERE id = $1`, [account.id, tenantId]);
+
+    const token = signAuthToken(account.id, tenantId);
     send(res, 200, {
       token,
       user: {
@@ -698,9 +714,9 @@ const server = createServer(async (req, res) => {
         email: account.email,
         publicId: account.public_id,
         accountId: account.id,
-        tenantId: ensuredAccess.tenantId,
+        tenantId,
         workspaceId: "workspace-main",
-        role: ensuredAccess.role[0] + ensuredAccess.role.slice(1).toLowerCase(),
+        role: ensuredRole[0] + ensuredRole.slice(1).toLowerCase(),
         teamIds: [],
       },
     });
