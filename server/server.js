@@ -157,6 +157,7 @@ const quoteIdent = (name) => `"${String(name).replace(/"/g, '""')}"`;
 const hashPassword = (password) => createHash("sha256").update(password).digest("hex");
 const normalizeText = (value = "") => String(value).trim();
 const normalizeEmail = (email = "") => normalizeText(email).toLowerCase();
+const isUuid = (value = "") => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(normalizeText(value));
 const tenantSchemaName = (tenantId) => `t_${String(tenantId).replaceAll("-", "")}`;
 const MEMBERSHIP_ROLES = ["OWNER", "ADMIN", "MANAGER", "MEMBER", "VIEWER"];
 const INVITE_ROLES = ["ADMIN", "MANAGER", "MEMBER", "VIEWER"];
@@ -932,10 +933,16 @@ const server = createServer(async (req, res) => {
     const claims = requireAuth(req, res);
     if (!claims) return;
 
-    const workspaceId = normalizeText(requestUrl.searchParams.get("workspaceId"));
+    const workspaceIdParam = normalizeText(requestUrl.searchParams.get("workspaceId"));
     const requesterUserId = normalizeText(claims.accountId);
-    if (!workspaceId || !requesterUserId) {
+    if (!workspaceIdParam || !requesterUserId) {
       send(res, 400, { error: "Missing required parameters" });
+      return;
+    }
+
+    const workspaceId = isUuid(workspaceIdParam) ? workspaceIdParam : normalizeText(claims.tenantId);
+    if (!isUuid(workspaceId) || !isUuid(requesterUserId)) {
+      send(res, 400, { error: "Invalid query" });
       return;
     }
 
@@ -965,17 +972,7 @@ const server = createServer(async (req, res) => {
         return;
       }
 
-      const schema = membership.schema_name;
-
-      if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(schema)) {
-        await client.query("ROLLBACK");
-        console.error("Invalid schema_name for search_path", { schema });
-        send(res, 500, { message: "Вътрешна грешка." });
-        return;
-      }
-
-      await client.query(`SET LOCAL search_path TO "${schema}", public`);
-
+      await client.query(`SET LOCAL search_path TO ${quoteIdent(membership.schema_name)}, public`);
 
       const row = (await client.query(`SELECT payload, updated_at FROM workspace_state WHERE workspace_id = $1`, [workspaceId])).rows[0] ?? null;
 
@@ -987,6 +984,7 @@ const server = createServer(async (req, res) => {
         message: error?.message,
         stack: error?.stack,
         workspaceId,
+        workspaceIdParam,
         requesterUserId,
         queryAccountId: normalizeText(requestUrl.searchParams.get("accountId")) || null,
       });
@@ -1119,7 +1117,7 @@ const server = createServer(async (req, res) => {
     const body = await readBody(req);
     const role = normalizeRole(body.role);
     const inviteeEmail = normalizeEmail(body.inviteeEmail ?? body.email);
-    const inviteeUserId = normalizeText(body.inviteeUserId ?? body.public_id ?? body.publicId).toUpperCase();
+    const inviteeUserId = normalizeText(body.inviteeUserId ?? body.public_id ?? body.publicId);
 
     if (!workspaceId || !INVITE_ROLES.includes(role)) {
       send(res, 400, { message: "Невалидна покана." });
@@ -1147,7 +1145,15 @@ const server = createServer(async (req, res) => {
       let inviteeEmailValue = null;
 
       if (hasInviteeUserId) {
-        const account = (await client.query(`SELECT id, email, public_id FROM public.accounts WHERE public_id = upper($1)`, [inviteeUserId])).rows[0];
+        const account = (
+          await client.query(
+            `SELECT id, email, public_id
+             FROM public.accounts
+             WHERE public_id = upper($1) OR id::text = $1
+             LIMIT 1`,
+            [inviteeUserId]
+          )
+        ).rows[0];
         if (!account) {
           await client.query("ROLLBACK");
           send(res, 404, { message: "User not found" });
