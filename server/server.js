@@ -929,11 +929,52 @@ const server = createServer(async (req, res) => {
   }
 
   if (requestUrl.pathname === "/api/workspace-state" && req.method === "GET") {
-    await withTenant(req, res, async (client) => {
-      const workspaceId = normalizeText(requestUrl.searchParams.get("workspaceId") ?? "workspace-main");
-      const row = (await client.query(`SELECT * FROM workspace_state WHERE workspace_id = $1`, [workspaceId])).rows[0] ?? null;
-      return { status: 200, body: row ? { state: row.payload, updatedAt: Number(row.updated_at) } : { state: null } };
-    });
+    const claims = requireAuth(req, res);
+    if (!claims) return;
+
+    const workspaceId = normalizeText(requestUrl.searchParams.get("workspaceId") ?? "workspace-main");
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const workspaceExistsResult = await client.query(
+        `SELECT 1 FROM public.workspace_memberships WHERE workspace_id = $1 LIMIT 1`,
+        [workspaceId]
+      );
+      if (workspaceExistsResult.rowCount === 0) {
+        await client.query("ROLLBACK");
+        send(res, 404, { error: "Workspace not found" });
+        return;
+      }
+
+      const membership = await getMembership(client, workspaceId, claims.accountId);
+      if (!membership) {
+        await client.query("ROLLBACK");
+        send(res, 403, { error: "Access denied" });
+        return;
+      }
+
+      const tenantRes = await client.query(`SELECT schema_name FROM public.tenants WHERE tenant_id = $1`, [workspaceId]);
+      const tenant = tenantRes.rows[0] ?? null;
+      if (!tenant?.schema_name) {
+        await client.query("ROLLBACK");
+        send(res, 404, { error: "Workspace not found" });
+        return;
+      }
+
+      await client.query(`SET LOCAL search_path TO ${quoteIdent(tenant.schema_name)}, public`);
+
+      const row = (await client.query(`SELECT payload, updated_at FROM workspace_state WHERE workspace_id = $1`, [workspaceId])).rows[0] ?? null;
+
+      await client.query("COMMIT");
+      send(res, 200, row ? { state: row.payload ?? null, updatedAt: Number(row.updated_at) } : { state: null });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error(error);
+      send(res, 500, { message: "Вътрешна грешка." });
+    } finally {
+      client.release();
+    }
     return;
   }
 
@@ -1153,6 +1194,7 @@ const server = createServer(async (req, res) => {
       send(res, 201, {
         invite: normalizedInvite,
         inviteId: invite.id,
+        token: invite.id,
         inviteLink: normalizedInvite.inviteLink,
         status: String(invite.status || "").toUpperCase(),
         role: invite.role,
