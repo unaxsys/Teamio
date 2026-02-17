@@ -455,6 +455,17 @@ const renderBoardSelector = () => {
   }
 };
 
+const ensurePreferredWorkspaceBoard = () => {
+  const boards = loadBoards();
+  const workspace = getCurrentWorkspace();
+  const currentBoardId = getCurrentBoardId();
+  const currentBoard = boards.find((board) => board.id === currentBoardId) ?? null;
+  const workspaceBoard = boards.find((board) => board.workspaceId && workspace?.id && board.workspaceId === workspace.id) ?? null;
+  if (workspaceBoard && (!currentBoard || !currentBoard.workspaceId)) {
+    setCurrentBoardId(workspaceBoard.id);
+  }
+};
+
 const updateBoardTopbar = () => {
   if (!currentBoardName) {
     return;
@@ -779,7 +790,22 @@ const canAssignTask = () => {
 
 const getAssignableMembers = () => {
   const account = getCurrentAccount();
-  return (account?.members ?? []).filter((member) => Boolean(member?.id));
+  const accountMembers = (account?.members ?? []).filter((member) => Boolean(member?.id));
+  const workspaceMembers = getWorkspaceMembers().map((member) => ({
+    id: member.userId ?? member.id,
+    userId: member.userId ?? member.id,
+    name: member.name,
+    email: member.email,
+    role: member.role,
+  }));
+  const byId = new Map();
+  [...accountMembers, ...workspaceMembers].forEach((member) => {
+    const key = member.userId ?? member.id;
+    if (key && !byId.has(key)) {
+      byId.set(key, member);
+    }
+  });
+  return Array.from(byId.values());
 };
 
 const renderTaskDetailsAssigneeOptions = (task) => {
@@ -980,6 +1006,7 @@ let syncDirty = false;
 let invitesSyncInFlight = false;
 let lastInvitesSyncKey = "";
 let workspaceMembersCountCache = null;
+let workspaceMembersCache = [];
 
 const pushWorkspaceState = async () => {
   const context = getSyncContext();
@@ -1329,6 +1356,7 @@ const showApp = async (user) => {
   updateProfile(normalizedUser);
   applyManagementAccessUi();
   applyRoleBasedTabVisibility();
+  ensurePreferredWorkspaceBoard();
   renderBoardSelector();
   syncTeamSelectors();
   await syncInvitesFromApi({ force: true });
@@ -2075,6 +2103,7 @@ const renderMembersInvitesSummary = async () => {
   if (noWorkspaceAccess) noWorkspaceAccess.hidden = hasWorkspaceAccess;
   if (!hasWorkspaceAccess) {
     workspaceMembersCountCache = null;
+    workspaceMembersCache = [];
     if (acceptedMembersList) acceptedMembersList.innerHTML = "";
     if (inviteList) inviteList.innerHTML = "";
     if (acceptedMembersCount) acceptedMembersCount.textContent = "0";
@@ -2100,6 +2129,7 @@ const renderMembersInvitesSummary = async () => {
 
   const pending = Array.isArray(apiResult.data?.pendingInvites) ? apiResult.data.pendingInvites : [];
   const accepted = Array.isArray(apiResult.data?.acceptedMembers) ? apiResult.data.acceptedMembers : [];
+  workspaceMembersCache = accepted;
   workspaceMembersCountCache = Math.max(accepted.length, 1);
   if (acceptedMembersCount) acceptedMembersCount.textContent = String(accepted.length);
   updateReports();
@@ -2704,6 +2734,13 @@ const renderCalendar = () => {
     });
 
   renderCalendarGrid(items);
+};
+
+const getWorkspaceMembers = () => {
+  if (Array.isArray(workspaceMembersCache) && workspaceMembersCache.length > 0) {
+    return workspaceMembersCache;
+  }
+  return [];
 };
 
 const getWorkspaceMemberCount = () => {
