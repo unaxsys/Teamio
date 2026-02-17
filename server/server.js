@@ -406,6 +406,87 @@ const createTenantSchema = async (client, tenantId, schemaName, owner) => {
   );
 };
 
+const ensureTenantAndMembership = async (client, accountId) => {
+  const account = (
+    await client.query(
+      `SELECT id, email, display_name, tenant_id
+       FROM public.accounts
+       WHERE id = $1
+       FOR UPDATE`,
+      [accountId]
+    )
+  ).rows[0];
+
+  if (!account) {
+    throw new Error(`Account not found: ${accountId}`);
+  }
+
+  let tenantMember = (
+    await client.query(
+      `SELECT tm.tenant_id, tm.role
+       FROM public.tenant_members tm
+       JOIN public.tenants t ON t.tenant_id = tm.tenant_id
+       WHERE tm.account_id = $1 AND tm.status = 'ACTIVE'
+       ORDER BY CASE tm.role WHEN 'OWNER' THEN 0 ELSE 1 END, tm.joined_at ASC
+       LIMIT 1`,
+      [accountId]
+    )
+  ).rows[0];
+
+  if (!tenantMember) {
+    let targetTenant = (
+      await client.query(
+        `SELECT wm.workspace_id AS tenant_id, wm.role
+         FROM public.workspace_memberships wm
+         JOIN public.tenants t ON t.tenant_id = wm.workspace_id
+         WHERE wm.account_id = $1 AND wm.active = true
+         ORDER BY CASE wm.role WHEN 'OWNER' THEN 0 ELSE 1 END, wm.created_at ASC
+         LIMIT 1`,
+        [accountId]
+      )
+    ).rows[0];
+
+    if (!targetTenant && account.tenant_id) {
+      const tenantExists = await client.query(`SELECT 1 FROM public.tenants WHERE tenant_id = $1`, [account.tenant_id]);
+      if (tenantExists.rowCount > 0) {
+        targetTenant = { tenant_id: account.tenant_id, role: "OWNER" };
+      }
+    }
+
+    if (!targetTenant) {
+      const tenantId = (await client.query("SELECT gen_random_uuid() AS id")).rows[0].id;
+      const schemaName = tenantSchemaName(tenantId);
+      await createTenantSchema(client, tenantId, schemaName, { name: account.display_name, email: account.email });
+      targetTenant = { tenant_id: tenantId, role: "OWNER" };
+    }
+
+    await client.query(
+      `INSERT INTO public.tenant_members (tenant_id, account_id, role, status)
+       VALUES ($1, $2, $3, 'ACTIVE')
+       ON CONFLICT (tenant_id, account_id)
+       DO UPDATE SET status = 'ACTIVE', role = EXCLUDED.role`,
+      [targetTenant.tenant_id, accountId, normalizeRole(targetTenant.role)]
+    );
+
+    tenantMember = { tenant_id: targetTenant.tenant_id, role: normalizeRole(targetTenant.role) };
+  }
+
+  const membership = await getDefaultActiveMembership(client, accountId);
+  const selectedTenantId = membership?.workspace_id ?? tenantMember.tenant_id;
+  const selectedRole = membership?.role ?? tenantMember.role;
+
+  if (!selectedTenantId || !selectedRole) {
+    throw new Error(`No active membership for account: ${accountId}`);
+  }
+
+  await client.query(`UPDATE public.accounts SET tenant_id = $2 WHERE id = $1`, [accountId, selectedTenantId]);
+
+  return {
+    tenantId: selectedTenantId,
+    role: normalizeRole(selectedRole),
+  };
+};
+
 const withTenant = async (req, res, handler) => {
   const claims = requireAuth(req, res);
   if (!claims) {
@@ -556,10 +637,10 @@ const server = createServer(async (req, res) => {
         )
       ).rows[0];
       await client.query(
-        `INSERT INTO public.workspace_memberships (workspace_id, account_id, role, active)
-         VALUES ($1, $2, 'OWNER', true)
-         ON CONFLICT (workspace_id, account_id)
-         DO UPDATE SET role = EXCLUDED.role, active = true`,
+        `INSERT INTO public.tenant_members (tenant_id, account_id, role, status)
+         VALUES ($1, $2, 'OWNER', 'ACTIVE')
+         ON CONFLICT (tenant_id, account_id)
+         DO UPDATE SET role = EXCLUDED.role, status = 'ACTIVE'`,
         [tenantId, account.id]
       );
       await client.query("COMMIT");
@@ -591,17 +672,22 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    const membership = await getDefaultActiveMembership(pool, account.id);
-
-    const selectedTenantId = membership?.workspace_id ?? null;
-    if (!selectedTenantId || !membership?.role) {
-      send(res, 403, { message: "Нямаш активно workspace membership." });
+    const client = await pool.connect();
+    let ensuredAccess;
+    try {
+      await client.query("BEGIN");
+      ensuredAccess = await ensureTenantAndMembership(client, account.id);
+      await client.query("COMMIT");
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error(error);
+      send(res, 500, { message: "Грешка при осигуряване на workspace достъп." });
       return;
+    } finally {
+      client.release();
     }
 
-    await pool.query(`UPDATE public.accounts SET tenant_id = $2 WHERE id = $1`, [account.id, selectedTenantId]);
-
-    const token = signAuthToken(account.id, selectedTenantId);
+    const token = signAuthToken(account.id, ensuredAccess.tenantId);
     send(res, 200, {
       token,
       user: {
@@ -610,9 +696,9 @@ const server = createServer(async (req, res) => {
         email: account.email,
         publicId: account.public_id,
         accountId: account.id,
-        tenantId: selectedTenantId,
+        tenantId: ensuredAccess.tenantId,
         workspaceId: "workspace-main",
-        role: membership.role[0] + membership.role.slice(1).toLowerCase(),
+        role: ensuredAccess.role[0] + ensuredAccess.role.slice(1).toLowerCase(),
         teamIds: [],
       },
     });
@@ -623,79 +709,94 @@ const server = createServer(async (req, res) => {
     const claims = requireAuth(req, res);
     if (!claims) return;
 
-    const accountRes = await pool.query(
-      `SELECT id, email, display_name, public_id, tenant_id, created_at FROM public.accounts WHERE id = $1`,
-      [claims.accountId]
-    );
-    const account = accountRes.rows[0];
-    if (!account) {
-      send(res, 404, { message: "Потребителят не е намерен." });
-      return;
-    }
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await ensureTenantAndMembership(client, claims.accountId);
 
-    let memberships = (
-      await pool.query(
-        `SELECT wm.workspace_id, wm.role,
-                'ACTIVE' AS status,
-                wm.created_at,
-                t.schema_name AS workspace_name
-         FROM public.workspace_memberships wm
-         LEFT JOIN public.tenants t ON t.tenant_id = wm.workspace_id
-         WHERE wm.account_id = $1
-           AND wm.active = true
-           AND wm.workspace_id IS NOT NULL
-         ORDER BY CASE wm.role WHEN 'OWNER' THEN 0 ELSE 1 END, wm.created_at ASC`,
+      const accountRes = await client.query(
+        `SELECT id, email, display_name, public_id, tenant_id, created_at FROM public.accounts WHERE id = $1`,
         [claims.accountId]
-      )
-    ).rows;
+      );
+      const account = accountRes.rows[0];
+      if (!account) {
+        await client.query("ROLLBACK");
+        send(res, 404, { message: "Потребителят не е намерен." });
+        return;
+      }
 
-    if (memberships.length === 0) {
-      const fallbackMemberships = (
-        await pool.query(
-          `SELECT workspace_id, role, active, created_at
-           FROM public.workspace_memberships
-           WHERE account_id = $1
-             AND active = true
-             AND workspace_id IS NOT NULL
-           ORDER BY CASE role WHEN 'OWNER' THEN 0 ELSE 1 END, created_at ASC`,
+      let memberships = (
+        await client.query(
+          `SELECT wm.workspace_id, wm.role,
+                  'ACTIVE' AS status,
+                  wm.created_at,
+                  t.schema_name AS workspace_name
+           FROM public.workspace_memberships wm
+           LEFT JOIN public.tenants t ON t.tenant_id = wm.workspace_id
+           WHERE wm.account_id = $1
+             AND wm.active = true
+             AND wm.workspace_id IS NOT NULL
+           ORDER BY CASE wm.role WHEN 'OWNER' THEN 0 ELSE 1 END, wm.created_at ASC`,
           [claims.accountId]
         )
       ).rows;
-      if (fallbackMemberships.length > 0) {
-        console.error(`[Teamio] /api/me inconsistency: account ${claims.accountId} has active memberships but primary query returned empty.`);
-        memberships = fallbackMemberships.map((row) => ({
-          workspace_id: row.workspace_id,
-          role: row.role,
-          status: 'ACTIVE',
-          created_at: row.created_at,
-          workspace_name: null,
-        }));
+
+      if (memberships.length === 0) {
+        const fallbackMemberships = (
+          await client.query(
+            `SELECT workspace_id, role, active, created_at
+             FROM public.workspace_memberships
+             WHERE account_id = $1
+               AND active = true
+               AND workspace_id IS NOT NULL
+             ORDER BY CASE role WHEN 'OWNER' THEN 0 ELSE 1 END, created_at ASC`,
+            [claims.accountId]
+          )
+        ).rows;
+        if (fallbackMemberships.length > 0) {
+          console.error(`[Teamio] /api/me inconsistency: account ${claims.accountId} has active memberships but primary query returned empty.`);
+          memberships = fallbackMemberships.map((row) => ({
+            workspace_id: row.workspace_id,
+            role: row.role,
+            status: 'ACTIVE',
+            created_at: row.created_at,
+            workspace_name: null,
+          }));
+        }
       }
+
+      const pendingInvites = (
+        await client.query(
+          `SELECT wi.id, wi.workspace_id, wi.invitee_email, wi.role,
+                  wi.status, wi.created_at, wi.responded_at
+           FROM public.workspace_invites wi
+           WHERE wi.invitee_account_id = $1 AND wi.status = 'pending'
+           ORDER BY wi.created_at DESC`,
+          [claims.accountId]
+        )
+      ).rows;
+
+      await client.query("COMMIT");
+
+      send(res, 200, {
+        account: {
+          id: account.id,
+          email: account.email,
+          displayName: account.display_name,
+          publicId: account.public_id,
+          tenantId: memberships[0]?.workspace_id ?? account.tenant_id,
+          createdAt: account.created_at,
+        },
+        memberships,
+        pendingInvites,
+      });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error(error);
+      send(res, 500, { message: "Грешка при зареждане на профила." });
+    } finally {
+      client.release();
     }
-
-    const pendingInvites = (
-      await pool.query(
-        `SELECT wi.id, wi.workspace_id, wi.invitee_email, wi.role,
-                wi.status, wi.created_at, wi.responded_at
-         FROM public.workspace_invites wi
-         WHERE wi.invitee_account_id = $1 AND wi.status = 'pending'
-         ORDER BY wi.created_at DESC`,
-        [claims.accountId]
-      )
-    ).rows;
-
-    send(res, 200, {
-      account: {
-        id: account.id,
-        email: account.email,
-        displayName: account.display_name,
-        publicId: account.public_id,
-        tenantId: memberships[0]?.workspace_id ?? account.tenant_id,
-        createdAt: account.created_at,
-      },
-      memberships,
-      pendingInvites,
-    });
     return;
   }
 
