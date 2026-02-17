@@ -395,6 +395,35 @@ const loadBoards = () => {
       }),
     ];
   }
+
+  if (workspace?.id) {
+    const user = loadCurrentUser();
+    const rawTasks = JSON.parse(localStorage.getItem("teamio-tasks") ?? "[]");
+    const knownBoardIds = new Set(normalized.map((board) => board.id));
+    const missingWorkspaceBoardIds = Array.from(
+      new Set(
+        rawTasks
+          .filter((task) => (!user?.accountId || task.accountId === user.accountId) && task.boardId && task.boardId !== "board-default")
+          .map((task) => task.boardId)
+          .filter((boardId) => !knownBoardIds.has(boardId))
+      )
+    );
+    if (missingWorkspaceBoardIds.length > 0) {
+      const generated = missingWorkspaceBoardIds.map((boardId, index) =>
+        normalizeBoard({
+          id: boardId,
+          name: `Фирмен борд ${index + 1}`,
+          createdAt: Date.now(),
+          visibility: "workspace",
+          createdBy: workspace.ownerUserId ?? user?.id ?? null,
+          workspaceId: workspace.id,
+          members: [],
+          settings: { allowComments: true, allowAttachments: true, labelsEnabled: true },
+        })
+      );
+      normalized = [...normalized, ...generated];
+    }
+  }
   persistAndSync("teamio-boards", JSON.stringify(normalized));
   if (!workspace?.id) {
     return normalized;
@@ -672,10 +701,10 @@ const getVisibleTasks = () => {
   const currentBoardId = getCurrentBoardId();
   const boards = loadBoards();
   const currentBoard = boards.find((board) => board.id === currentBoardId);
-  const accountTasks = allTasks.filter((task) => (!user?.accountId || task.accountId === user.accountId) && (task.boardId ?? currentBoardId) === currentBoardId);
+  const accountScopedTasks = allTasks.filter((task) => !user?.accountId || task.accountId === user.accountId);
   const boardScopedTasks = !currentBoard?.workspaceId
-    ? accountTasks.filter((task) => (task.assignedUserIds ?? []).includes(user?.id))
-    : accountTasks;
+    ? accountScopedTasks.filter((task) => (task.assignedUserIds ?? []).includes(user?.id))
+    : accountScopedTasks.filter((task) => (task.boardId ?? currentBoardId) === currentBoardId);
   const selectedTeamIds = getSelectedValues(boardTeamFilter);
   if (selectedTeamIds.length === 0) {
     return boardScopedTasks;
