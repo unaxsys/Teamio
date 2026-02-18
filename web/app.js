@@ -380,7 +380,7 @@ const loadBoards = () => {
       ...normalized,
       normalizeBoard({
         id: `board-workspace-${workspace.id}`,
-        name: `${workspace.name || "Workspace"} борд`,
+        name: `${workspace.name || "Workspace"} `,
         createdAt: Date.now(),
         visibility: "workspace",
         createdBy: workspace.ownerUserId ?? loadCurrentUser()?.id ?? null,
