@@ -20,7 +20,8 @@ const loadEnvFile = (envFilePath) => {
       const separatorIndex = trimmed.indexOf("=");
       if (separatorIndex <= 0) continue;
       const key = trimmed.slice(0, separatorIndex).trim();
-      if (!key || process.env[key] !== undefined) continue;
+      const existing = String(process.env[key] ?? "").trim();
+      if (!key || (existing && existing !== "undefined" && existing !== "null")) continue;
       let value = trimmed.slice(separatorIndex + 1).trim();
       if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
         value = value.slice(1, -1);
@@ -35,19 +36,107 @@ const loadEnvFile = (envFilePath) => {
 };
 
 loadEnvFile(path.join(__dirname, ".env"));
+loadEnvFile(path.join(__dirname, "../.env"));
+loadEnvFile(path.join(process.cwd(), ".env"));
 
 const PORT = Number(process.env.PORT ?? 8787);
 const HOST = process.env.HOST || "0.0.0.0";
-const DATABASE_URL = (process.env.DATABASE_URL || "").trim();
 const JWT_SECRET = (process.env.JWT_SECRET || "teamio-dev-secret").trim();
 const WEB_DIR = path.join(__dirname, "../web");
 
-const pool = DATABASE_URL ? new Pool({ connectionString: DATABASE_URL }) : null;
-let dbReady = Boolean(pool);
+const normalizeEnvValue = (value) => {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  if (text === "undefined" || text === "null") return "";
+  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
+    return text.slice(1, -1).trim();
+  }
+  return text;
+};
 
-const dbUnavailableMessage = "Базата не е конфигурирана или е недостъпна. Провери DATABASE_URL.";
-const ensureDb = (res) => {
+const readEnv = (...keys) => {
+  for (const key of keys) {
+    const value = normalizeEnvValue(process.env[key]);
+    if (value) return value;
+  }
+  return "";
+};
+
+const buildConnStringFromParts = () => {
+  const host = readEnv("DB_HOST", "PGHOST");
+  const port = readEnv("DB_PORT", "PGPORT") || "5432";
+  const name = readEnv("DB_NAME", "PGDATABASE");
+  const user = readEnv("DB_USER", "PGUSER");
+  const pass = readEnv("DB_PASS", "PGPASSWORD");
+
+  if (!host || !name || !user) return "";
+  // encode password safely (handles * # ! etc.)
+  const encUser = encodeURIComponent(user);
+  const encPass = encodeURIComponent(pass);
+  return `postgresql://${encUser}:${encPass}@${host}:${port}/${name}`;
+};
+
+const DATABASE_URL = readEnv("DATABASE_URL", "DB_URL", "POSTGRES_URL", "POSTGRESQL_URL");
+const EFFECTIVE_DB_URL = DATABASE_URL || buildConnStringFromParts();
+
+const shouldEnableDbSsl = (value = "") => {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) return false;
+  if (["1", "true", "yes", "on", "require", "required", "verify-ca", "verify-full"].includes(normalized)) {
+    return true;
+  }
+  return false;
+};
+
+const getSslModeFromConnectionString = (connectionString = "") => {
+  if (!connectionString) return "";
+  try {
+    const parsed = new URL(connectionString);
+    return String(parsed.searchParams.get("sslmode") || parsed.searchParams.get("ssl") || "").trim();
+  } catch {
+    return "";
+  }
+};
+
+const DB_SSL = readEnv("DB_SSL", "DATABASE_SSL", "PGSSLMODE");
+const SSL_MODE_FROM_URL = getSslModeFromConnectionString(EFFECTIVE_DB_URL);
+const dbSslEnabled = shouldEnableDbSsl(DB_SSL) || shouldEnableDbSsl(SSL_MODE_FROM_URL);
+
+const poolConfig = EFFECTIVE_DB_URL
+  ? {
+      connectionString: EFFECTIVE_DB_URL,
+      ...(dbSslEnabled ? { ssl: { rejectUnauthorized: false } } : {}),
+    }
+  : null;
+
+const pool = poolConfig ? new Pool(poolConfig) : null;
+const dbConfigSource = DATABASE_URL ? "DATABASE_URL" : EFFECTIVE_DB_URL ? "DB_PARTS" : "NONE";
+let dbReady = false;
+let dbInitError = null;
+
+const dbUnavailableMessage =
+  "Базата не е конфигурирана или е недостъпна. Провери DATABASE_URL или DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASS.";
+
+const tryRecoverDb = async () => {
+  if (!pool) return false;
+  try {
+    await pool.query("SELECT 1");
+    dbReady = true;
+    dbInitError = null;
+    return true;
+  } catch (error) {
+    dbReady = false;
+    dbInitError = String(error?.message || error);
+    return false;
+  }
+};
+
+tryRecoverDb();
+
+const ensureDb = async (res) => {
   if (pool && dbReady) return true;
+  const recovered = await tryRecoverDb();
+  if (recovered) return true;
   send(res, 503, { message: dbUnavailableMessage });
   return false;
 };
@@ -68,7 +157,56 @@ const quoteIdent = (name) => `"${String(name).replace(/"/g, '""')}"`;
 const hashPassword = (password) => createHash("sha256").update(password).digest("hex");
 const normalizeText = (value = "") => String(value).trim();
 const normalizeEmail = (email = "") => normalizeText(email).toLowerCase();
+const isUuid = (value = "") => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(normalizeText(value));
 const tenantSchemaName = (tenantId) => `t_${String(tenantId).replaceAll("-", "")}`;
+const MEMBERSHIP_ROLES = ["OWNER", "ADMIN", "MANAGER", "MEMBER", "VIEWER"];
+const INVITE_ROLES = ["ADMIN", "MANAGER", "MEMBER", "VIEWER"];
+
+const normalizeRole = (role = "") => {
+  const normalized = normalizeText(role).toUpperCase();
+  if (MEMBERSHIP_ROLES.includes(normalized)) return normalized;
+  return "MEMBER";
+};
+
+const generatePublicId = () => randomBytes(6).toString("base64url").replace(/[^a-zA-Z0-9]/g, "").slice(0, 10).toUpperCase();
+const generateInviteToken = () => randomBytes(24).toString("hex");
+
+const getAppBaseUrl = (req) => {
+  const configured = readEnv("APP_BASE_URL", "BASE_URL", "PUBLIC_BASE_URL", "WEB_BASE_URL");
+  if (configured) {
+    return configured.replace(/\/$/, "");
+  }
+  const host = normalizeText(req.headers.host || "");
+  if (!host) return "";
+  const forwardedProto = normalizeText(req.headers["x-forwarded-proto"] || "");
+  const protocol = forwardedProto || (host.startsWith("localhost") || host.startsWith("127.0.0.1") ? "http" : "http");
+  return `${protocol}://${host}`;
+};
+
+const buildInviteLink = (req, inviteId) => {
+  const baseUrl = getAppBaseUrl(req);
+  if (!baseUrl || !inviteId) return "";
+  return `${baseUrl}/?invite=${inviteId}`;
+};
+
+const buildTenantSchemaSlugFromEmail = (email = "") => {
+  const normalizedEmail = normalizeEmail(email);
+  const rawSlug = normalizedEmail
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/_+/g, "_");
+  const base = rawSlug ? `u_${rawSlug}` : "u_account";
+  return base.slice(0, 50);
+};
+
+const createUniquePublicId = async (client) => {
+  for (let i = 0; i < 12; i += 1) {
+    const candidate = generatePublicId();
+    const exists = await client.query(`SELECT 1 FROM public.accounts WHERE public_id = $1`, [candidate]);
+    if (exists.rowCount === 0) return candidate;
+  }
+  return `${generatePublicId()}${Date.now().toString(36).slice(-2)}`;
+};
 
 const send = (res, statusCode, payload) => {
   res.writeHead(statusCode, {
@@ -107,24 +245,165 @@ const verifyAuthToken = (token) => {
   }
 };
 
+const requireAuth = (req, res) => {
+  const token = parseAuthHeader(req);
+  const claims = token ? verifyAuthToken(token) : null;
+  if (!claims?.accountId) {
+    send(res, 401, { message: "Липсва валиден JWT." });
+    return null;
+  }
+  return claims;
+};
+
+const getMembership = async (client, tenantId, accountId) => {
+  const membershipRes = await client.query(
+    `SELECT workspace_id, account_id, role, active, created_at
+     FROM public.workspace_memberships
+     WHERE workspace_id = $1 AND account_id = $2 AND active = true`,
+    [tenantId, accountId]
+  );
+  return membershipRes.rows[0] ?? null;
+};
+
+const getDefaultActiveMembership = async (client, accountId) => {
+  const membershipRes = await client.query(
+    `SELECT workspace_id, role, active, created_at
+     FROM public.workspace_memberships
+     WHERE account_id = $1 AND active = true AND workspace_id IS NOT NULL
+     ORDER BY CASE role WHEN 'OWNER' THEN 0 ELSE 1 END, created_at ASC
+     LIMIT 1`,
+    [accountId]
+  );
+  return membershipRes.rows[0] ?? null;
+};
+
+const requireWorkspaceRole = async (client, workspaceId, accountId, allowedRoles = []) => {
+  const membership = await getMembership(client, workspaceId, accountId);
+  if (!membership) return null;
+  const normalizedAllowedRoles = allowedRoles.map((role) => normalizeRole(role));
+  if (normalizedAllowedRoles.length === 0 || normalizedAllowedRoles.includes(normalizeRole(membership.role))) {
+    return membership;
+  }
+  return null;
+};
+
+const isOwnerOrAdmin = (role = "") => ["OWNER", "ADMIN"].includes(normalizeRole(role));
+
 const initDb = async () => {
   if (!pool) return;
   await pool.query(`
     CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+    CREATE TABLE IF NOT EXISTS public.tenants (
+      tenant_id UUID PRIMARY KEY,
+      schema_name TEXT NOT NULL UNIQUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
 
     CREATE TABLE IF NOT EXISTS public.accounts (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       email TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
       display_name TEXT,
+      public_id TEXT UNIQUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      tenant_id UUID UNIQUE NOT NULL
+      tenant_id UUID NULL REFERENCES public.tenants(tenant_id) ON DELETE SET NULL
     );
 
-    CREATE TABLE IF NOT EXISTS public.tenants (
-      tenant_id UUID PRIMARY KEY,
-      schema_name TEXT NOT NULL UNIQUE,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    ALTER TABLE public.accounts DROP CONSTRAINT IF EXISTS accounts_tenant_id_key;
+    ALTER TABLE public.accounts ALTER COLUMN tenant_id DROP NOT NULL;
+
+    ALTER TABLE public.accounts ADD COLUMN IF NOT EXISTS company_profile JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+    CREATE TABLE IF NOT EXISTS public.tenant_members (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id UUID NOT NULL REFERENCES public.tenants(tenant_id) ON DELETE CASCADE,
+      account_id UUID NOT NULL REFERENCES public.accounts(id) ON DELETE CASCADE,
+      role TEXT NOT NULL DEFAULT 'OWNER' CHECK (role IN ('OWNER','ADMIN','MANAGER','MEMBER','VIEWER')),
+      status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','REMOVED')),
+      joined_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (tenant_id, account_id)
+    );
+
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'tenant_members'
+          AND column_name = 'role'
+      ) AND EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'tenant_members'
+          AND column_name = 'status'
+      ) THEN
+        EXECUTE 'ALTER TABLE public.tenant_members ALTER COLUMN role SET DEFAULT ''OWNER''';
+        EXECUTE 'CREATE UNIQUE INDEX IF NOT EXISTS uniq_tenant_owner_active ON public.tenant_members(tenant_id) WHERE role = ''OWNER'' AND status = ''ACTIVE''';
+      END IF;
+    END
+    $$;
+
+    CREATE TABLE IF NOT EXISTS public.tenant_invites (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id UUID NOT NULL REFERENCES public.tenants(tenant_id) ON DELETE CASCADE,
+      invited_by_account_id UUID NOT NULL REFERENCES public.accounts(id),
+      invited_account_id UUID NULL REFERENCES public.accounts(id),
+      invited_email TEXT NULL,
+      role TEXT NOT NULL CHECK (role IN ('ADMIN','MANAGER','MEMBER','VIEWER')),
+      status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','ACCEPTED','DECLINED','REVOKED','EXPIRED')),
+      token TEXT NOT NULL UNIQUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at TIMESTAMPTZ NOT NULL DEFAULT (now() + interval '48 hours'),
+      responded_at TIMESTAMPTZ NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_pending_invite_account
+    ON public.tenant_invites(tenant_id, invited_account_id)
+    WHERE status = 'PENDING' AND invited_account_id IS NOT NULL;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_pending_invite_email
+    ON public.tenant_invites(tenant_id, lower(invited_email))
+    WHERE status = 'PENDING' AND invited_email IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS public.workspace_memberships (
+      workspace_id UUID NOT NULL REFERENCES public.tenants(tenant_id) ON DELETE CASCADE,
+      account_id UUID NOT NULL REFERENCES public.accounts(id) ON DELETE CASCADE,
+      role TEXT NOT NULL CHECK (role IN ('OWNER','ADMIN','MANAGER','MEMBER','VIEWER')),
+      active BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (workspace_id, account_id)
+    );
+
+    CREATE OR REPLACE FUNCTION public.sync_workspace_membership_from_tenant_member()
+    RETURNS trigger AS $$
+    BEGIN
+      INSERT INTO public.workspace_memberships (workspace_id, account_id, role, active)
+      VALUES (NEW.tenant_id, NEW.account_id, 'OWNER', true)
+      ON CONFLICT (workspace_id, account_id)
+      DO UPDATE SET active = true;
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    DROP TRIGGER IF EXISTS trg_sync_workspace_membership_from_tenant_member ON public.tenant_members;
+    CREATE TRIGGER trg_sync_workspace_membership_from_tenant_member
+    AFTER INSERT ON public.tenant_members
+    FOR EACH ROW
+    EXECUTE FUNCTION public.sync_workspace_membership_from_tenant_member();
+
+    CREATE TABLE IF NOT EXISTS public.workspace_invites (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID NOT NULL REFERENCES public.tenants(tenant_id) ON DELETE CASCADE,
+      invited_by_account_id UUID NOT NULL REFERENCES public.accounts(id),
+      invitee_account_id UUID NULL REFERENCES public.accounts(id),
+      invitee_email TEXT NULL,
+      role TEXT NOT NULL CHECK (role IN ('ADMIN','MANAGER','MEMBER','VIEWER')),
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','declined','expired')),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      responded_at TIMESTAMPTZ NULL
     );
 
     CREATE TABLE IF NOT EXISTS public.audit_log (
@@ -137,6 +416,12 @@ const initDb = async () => {
     );
 
     CREATE INDEX IF NOT EXISTS idx_audit_tenant ON public.audit_log(tenant_id);
+
+    UPDATE public.accounts
+    SET public_id = upper(substr(encode(gen_random_bytes(8), 'hex'), 1, 10))
+    WHERE public_id IS NULL;
+
+    ALTER TABLE public.accounts ALTER COLUMN public_id SET NOT NULL;
   `);
 };
 
@@ -191,23 +476,6 @@ const createTenantSchema = async (client, tenantId, schemaName, owner) => {
     BEFORE UPDATE ON tasks
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
-    CREATE TABLE IF NOT EXISTS members (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      email TEXT NOT NULL,
-      full_name TEXT,
-      role TEXT NOT NULL DEFAULT 'member',
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      UNIQUE(email)
-    );
-
-    CREATE TABLE IF NOT EXISTS invites (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      email TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'member',
-      token TEXT UNIQUE NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      accepted_at TIMESTAMPTZ
-    );
 
     CREATE TABLE IF NOT EXISTS workspace_state (
       id TEXT PRIMARY KEY,
@@ -230,11 +498,6 @@ const createTenantSchema = async (client, tenantId, schemaName, owner) => {
   }
 
   await client.query(
-    `INSERT INTO members(email, full_name, role) VALUES($1, $2, 'owner') ON CONFLICT(email) DO NOTHING`,
-    [owner.email, owner.name]
-  );
-
-  await client.query(
     `INSERT INTO public.tenants (tenant_id, schema_name)
      VALUES ($1, $2)
      ON CONFLICT (tenant_id) DO NOTHING`,
@@ -242,18 +505,103 @@ const createTenantSchema = async (client, tenantId, schemaName, owner) => {
   );
 };
 
+const ensureTenantForAccount = async ({ pool, accountId, email }) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const existing = await client.query(
+      `SELECT tenant_id
+       FROM public.tenant_members
+       WHERE account_id = $1
+       LIMIT 1`,
+      [accountId]
+    );
+
+    if (existing.rowCount > 0) {
+      await client.query("COMMIT");
+      return existing.rows[0].tenant_id;
+    }
+
+    let ensuredEmail = normalizeEmail(email);
+    if (!ensuredEmail) {
+      const accountRes = await client.query(`SELECT email FROM public.accounts WHERE id = $1`, [accountId]);
+      ensuredEmail = normalizeEmail(accountRes.rows[0]?.email);
+    }
+
+    const base = buildTenantSchemaSlugFromEmail(ensuredEmail);
+    let tenantId = null;
+
+    for (let i = 0; i < 5; i += 1) {
+      const schemaName = i === 0 ? base : `${base}_${i + 1}`;
+      try {
+        const insTenant = await client.query(
+          `INSERT INTO public.tenants (tenant_id, schema_name)
+           VALUES (gen_random_uuid(), $1)
+           RETURNING tenant_id`,
+          [schemaName]
+        );
+        tenantId = insTenant.rows[0].tenant_id;
+        break;
+      } catch (error) {
+        if (error?.code === "23505") continue;
+        throw error;
+      }
+    }
+
+    if (!tenantId) {
+      throw new Error("Failed to create tenant (schema_name conflicts)");
+    }
+
+    await client.query(
+      `INSERT INTO public.tenant_members (tenant_id, account_id)
+       VALUES ($1, $2)
+       ON CONFLICT DO NOTHING`,
+      [tenantId, accountId]
+    );
+
+    await client.query("COMMIT");
+    return tenantId;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+const ensureTenantAndMembership = async (client, accountId, email) => {
+  const tenantId = await ensureTenantForAccount({ pool, accountId, email });
+  const membership = await getDefaultActiveMembership(client, accountId);
+  const selectedTenantId = membership?.workspace_id ?? tenantId;
+  const selectedRole = membership?.role ?? "OWNER";
+
+  await client.query(`UPDATE public.accounts SET tenant_id = $2 WHERE id = $1`, [accountId, selectedTenantId]);
+
+  return {
+    tenantId: selectedTenantId,
+    role: normalizeRole(selectedRole),
+  };
+};
+
 const withTenant = async (req, res, handler) => {
-  const token = parseAuthHeader(req);
-  const claims = token ? verifyAuthToken(token) : null;
-  if (!claims?.tenantId || !claims?.accountId) {
-    send(res, 401, { message: "Липсва валиден JWT." });
+  const claims = requireAuth(req, res);
+  if (!claims) {
     return;
   }
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const tenantResult = await client.query(`SELECT schema_name FROM public.tenants WHERE tenant_id = $1`, [claims.tenantId]);
+    const defaultMembership = await getDefaultActiveMembership(client, claims.accountId);
+    const effectiveTenantId = normalizeText(claims.tenantId) || defaultMembership?.workspace_id || null;
+    if (!effectiveTenantId) {
+      await client.query("ROLLBACK");
+      send(res, 403, { message: "Нямаш достъп до workspace." });
+      return;
+    }
+
+    const tenantResult = await client.query(`SELECT schema_name FROM public.tenants WHERE tenant_id = $1`, [effectiveTenantId]);
     const tenant = tenantResult.rows[0];
     if (!tenant) {
       await client.query("ROLLBACK");
@@ -261,9 +609,16 @@ const withTenant = async (req, res, handler) => {
       return;
     }
 
+    const membership = await getMembership(client, effectiveTenantId, claims.accountId);
+    if (!membership) {
+      await client.query("ROLLBACK");
+      send(res, 403, { message: "Нямаш достъп до този workspace." });
+      return;
+    }
+
     const qSchema = quoteIdent(tenant.schema_name);
     await client.query(`SET LOCAL search_path TO ${qSchema}, public`);
-    const output = await handler(client, claims, tenant);
+    const output = await handler(client, { ...claims, tenantId: effectiveTenantId, membershipRole: membership.role }, tenant, membership);
     await client.query("COMMIT");
     if (output) send(res, output.status ?? 200, output.body ?? { ok: true });
   } catch (error) {
@@ -280,39 +635,50 @@ const mapAccountContext = async (client, claims) => {
   const accountRes = await client.query(`SELECT * FROM public.accounts WHERE id = $1`, [claims.accountId]);
   const tenant = tenantRes.rows[0];
   const account = accountRes.rows[0];
-  const membersRes = await client.query(`SELECT * FROM members ORDER BY created_at DESC`);
+
+  const membersRes = await client.query(
+    `SELECT wm.account_id, wm.role, wm.created_at AS joined_at, a.email, a.display_name
+     FROM public.workspace_memberships wm
+     JOIN public.accounts a ON a.id = wm.account_id
+     WHERE wm.workspace_id = $1 AND wm.active = true
+     ORDER BY wm.created_at DESC`,
+    [claims.tenantId]
+  );
+
   const members = membersRes.rows.map((m) => ({
-    id: m.id,
-    userId: null,
-    name: m.full_name || m.email,
+    id: m.account_id,
+    userId: m.account_id,
+    name: m.display_name || m.email,
     email: m.email,
-    role: m.role === "owner" ? "Owner" : "Member",
+    role: m.role[0] + m.role.slice(1).toLowerCase(),
     teamIds: [],
   }));
+
+  const owner = members.find((m) => normalizeRole(m.role) === 'OWNER');
 
   return {
     id: tenant.tenant_id,
     name: account?.display_name || account?.email || "Teamio",
-    ownerUserId: account?.id ?? null,
+    ownerUserId: owner?.id ?? null,
     plan: "Free",
     status: "active",
     createdAt: new Date(tenant.created_at).getTime(),
     workspaces: [
       {
-        id: "workspace-main",
+        id: claims.tenantId,
         name: "Основно пространство",
         description: "Главно работно пространство",
-        ownerUserId: account?.id ?? null,
+        ownerUserId: owner?.id ?? null,
         memberRoles: members.map((m) => ({ userId: m.userId, role: m.role })),
       },
     ],
     teams: [],
     members,
     companyProfile: {
-      vatId: "",
-      vatNumber: "",
-      address: "",
-      logoDataUrl: "",
+      vatId: normalizeText(account?.company_profile?.vatId ?? ""),
+      vatNumber: normalizeText(account?.company_profile?.vatNumber ?? ""),
+      address: normalizeText(account?.company_profile?.address ?? ""),
+      logoDataUrl: normalizeText(account?.company_profile?.logoDataUrl ?? ""),
     },
   };
 };
@@ -326,11 +692,11 @@ const server = createServer(async (req, res) => {
   const requestUrl = new URL(req.url ?? "/", `http://${req.headers.host ?? `localhost:${PORT}`}`);
 
   if (requestUrl.pathname === "/api/health" && req.method === "GET") {
-    send(res, 200, { ok: true, dbReady, hasDatabaseUrl: Boolean(DATABASE_URL) });
+    send(res, 200, { ok: true, dbReady, hasDatabaseUrl: Boolean(EFFECTIVE_DB_URL), dbConfigSource, dbInitError });
     return;
   }
 
-  if (requestUrl.pathname.startsWith("/api/") && requestUrl.pathname !== "/api/health" && !ensureDb(res)) {
+  if (requestUrl.pathname.startsWith("/api/") && requestUrl.pathname !== "/api/health" && !(await ensureDb(res))) {
     return;
   }
 
@@ -358,15 +724,27 @@ const server = createServer(async (req, res) => {
 
       await client.query("BEGIN");
       await createTenantSchema(client, tenantId, schemaName, { name, email });
+      const publicId = await createUniquePublicId(client);
+      const account = (
+        await client.query(
+          `INSERT INTO public.accounts (email, password_hash, display_name, public_id, tenant_id)
+           VALUES ($1, $2, $3, $4, $5)
+           RETURNING id, email, display_name, public_id, tenant_id`,
+          [email, hashPassword(password), name, publicId, tenantId]
+        )
+      ).rows[0];
       await client.query(
-        `INSERT INTO public.accounts (email, password_hash, display_name, tenant_id)
-         VALUES ($1, $2, $3, $4)
-         RETURNING id`,
-        [email, hashPassword(password), name, tenantId]
+        `INSERT INTO public.tenant_members (tenant_id, account_id)
+         VALUES ($1, $2)
+         ON CONFLICT DO NOTHING`,
+        [tenantId, account.id]
       );
       await client.query("COMMIT");
 
-      send(res, 201, { message: "Регистрацията е успешна." });
+      send(res, 201, {
+        message: "Регистрацията е успешна.",
+        account: { id: account.id, email: account.email, displayName: account.display_name, publicId: account.public_id },
+      });
     } catch (error) {
       try { await client.query("ROLLBACK"); } catch {}
       console.error(error);
@@ -382,33 +760,151 @@ const server = createServer(async (req, res) => {
     const email = normalizeEmail(body.email);
     const password = normalizeText(body.password);
 
-    const result = await pool.query(
-      `SELECT a.*, t.schema_name FROM public.accounts a
-       JOIN public.tenants t ON t.tenant_id = a.tenant_id
-       WHERE a.email = $1`,
-      [email]
-    );
-    const account = result.rows[0];
+    const accountRes = await pool.query(`SELECT * FROM public.accounts WHERE email = $1`, [email]);
+    const account = accountRes.rows[0];
 
     if (!account || account.password_hash !== hashPassword(password)) {
       send(res, 401, { message: "Невалидни данни. Провери имейла и паролата." });
       return;
     }
 
-    const token = signAuthToken(account.id, account.tenant_id);
+    let tenantId;
+    console.log(`ensureTenantForAccount start accountId=${account.id}`);
+    try {
+      tenantId = await ensureTenantForAccount({ pool, accountId: account.id, email: account.email });
+      console.log(`ensureTenantForAccount result tenantId=${tenantId}`);
+    } catch (error) {
+      console.error("ensureTenantForAccount error", error);
+      send(res, 500, { message: "Грешка при осигуряване на workspace достъп." });
+      return;
+    }
+
+    let ensuredRole = "OWNER";
+    const roleRes = await pool.query(
+      `SELECT role, active
+       FROM public.workspace_memberships
+       WHERE workspace_id = $1 AND account_id = $2
+       LIMIT 1`,
+      [tenantId, account.id]
+    );
+    if (roleRes.rowCount > 0 && roleRes.rows[0].active) {
+      ensuredRole = normalizeRole(roleRes.rows[0].role);
+    }
+
+    await pool.query(`UPDATE public.accounts SET tenant_id = $2 WHERE id = $1`, [account.id, tenantId]);
+
+    const token = signAuthToken(account.id, tenantId);
     send(res, 200, {
       token,
       user: {
         id: account.id,
         name: account.display_name,
         email: account.email,
+        publicId: account.public_id,
         accountId: account.id,
-        tenantId: account.tenant_id,
-        workspaceId: "workspace-main",
-        role: "Owner",
+        tenantId,
+        workspaceId: tenantId,
+        role: ensuredRole[0] + ensuredRole.slice(1).toLowerCase(),
         teamIds: [],
       },
     });
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/me" && req.method === "GET") {
+    const claims = requireAuth(req, res);
+    if (!claims) return;
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const ensuredAccess = await ensureTenantAndMembership(client, claims.accountId);
+
+      const accountRes = await client.query(
+        `SELECT id, email, display_name, public_id, tenant_id, created_at FROM public.accounts WHERE id = $1`,
+        [claims.accountId]
+      );
+      const account = accountRes.rows[0];
+      if (!account) {
+        await client.query("ROLLBACK");
+        send(res, 404, { message: "Потребителят не е намерен." });
+        return;
+      }
+
+      let memberships = (
+        await client.query(
+          `SELECT wm.workspace_id, wm.role,
+                  'ACTIVE' AS status,
+                  wm.created_at,
+                  t.schema_name AS workspace_name
+           FROM public.workspace_memberships wm
+           LEFT JOIN public.tenants t ON t.tenant_id = wm.workspace_id
+           WHERE wm.account_id = $1
+             AND wm.active = true
+             AND wm.workspace_id IS NOT NULL
+           ORDER BY CASE wm.role WHEN 'OWNER' THEN 0 ELSE 1 END, wm.created_at ASC`,
+          [claims.accountId]
+        )
+      ).rows;
+
+      if (memberships.length === 0) {
+        const fallbackMemberships = (
+          await client.query(
+            `SELECT workspace_id, role, active, created_at
+             FROM public.workspace_memberships
+             WHERE account_id = $1
+               AND active = true
+               AND workspace_id IS NOT NULL
+             ORDER BY CASE role WHEN 'OWNER' THEN 0 ELSE 1 END, created_at ASC`,
+            [claims.accountId]
+          )
+        ).rows;
+        if (fallbackMemberships.length > 0) {
+          console.error(`[Teamio] /api/me inconsistency: account ${claims.accountId} has active memberships but primary query returned empty.`);
+          memberships = fallbackMemberships.map((row) => ({
+            workspace_id: row.workspace_id,
+            role: row.role,
+            status: 'ACTIVE',
+            created_at: row.created_at,
+            workspace_name: null,
+          }));
+        }
+      }
+
+      const pendingInvites = (
+        await client.query(
+          `SELECT wi.id, wi.workspace_id, wi.invitee_email, wi.role,
+                  wi.status, wi.created_at, wi.responded_at
+           FROM public.workspace_invites wi
+           WHERE wi.invitee_account_id = $1 AND wi.status = 'pending'
+           ORDER BY wi.created_at DESC`,
+          [claims.accountId]
+        )
+      ).rows;
+
+      await client.query("COMMIT");
+
+      send(res, 200, {
+        account: {
+          id: account.id,
+          email: account.email,
+          displayName: account.display_name,
+          publicId: account.public_id,
+          tenantId: memberships[0]?.workspace_id ?? account.tenant_id,
+          activeTenantId: ensuredAccess.tenantId,
+          activeWorkspaceId: ensuredAccess.tenantId,
+          createdAt: account.created_at,
+        },
+        memberships,
+        pendingInvites,
+      });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error(error);
+      send(res, 500, { message: "Грешка при зареждане на профила." });
+    } finally {
+      client.release();
+    }
     return;
   }
 
@@ -428,19 +924,138 @@ const server = createServer(async (req, res) => {
   if (requestUrl.pathname === "/api/accounts/company-profile" && req.method === "POST") {
     const body = await readBody(req);
     await withTenant(req, res, async (client, claims) => {
-      const profile = body.companyProfile ?? {};
-      await client.query(`UPDATE public.accounts SET display_name = $2 WHERE id = $1`, [claims.accountId, normalizeText(profile.name)]);
-      return { status: 200, body: { ok: true } };
+      const profileInput = body.companyProfile && typeof body.companyProfile === "object" ? body.companyProfile : body;
+      const nextName = normalizeText(profileInput.name);
+      const companyProfile = {
+        vatId: normalizeText(profileInput.vatId),
+        vatNumber: normalizeText(profileInput.vatNumber),
+        address: normalizeText(profileInput.address),
+        logoDataUrl: normalizeText(profileInput.logoDataUrl),
+      };
+
+      await client.query(
+        `UPDATE public.accounts
+         SET display_name = COALESCE(NULLIF($2, ''), display_name),
+             company_profile = $3::jsonb
+         WHERE id = $1`,
+        [claims.accountId, nextName, JSON.stringify(companyProfile)]
+      );
+
+      const account = await mapAccountContext(client, claims);
+      return { status: 200, body: { ok: true, companyProfile: { name: account.name, ...account.companyProfile } } };
+    });
+    return;
+  }
+
+
+  if (requestUrl.pathname === "/api/accounts/company-profile-by-vat" && req.method === "GET") {
+    const vatId = normalizeText(requestUrl.searchParams.get("vatId") ?? "");
+    if (!vatId) {
+      send(res, 400, { message: "Липсва ЕИК." });
+      return;
+    }
+    const result = await pool.query(
+      `SELECT display_name, company_profile
+       FROM public.accounts
+       WHERE company_profile->>'vatId' = $1
+       LIMIT 1`,
+      [vatId]
+    );
+    const row = result.rows[0];
+    if (!row) {
+      send(res, 404, { message: "Няма намерена фирма по този ЕИК." });
+      return;
+    }
+    send(res, 200, {
+      companyProfile: {
+        name: normalizeText(row.display_name ?? ""),
+        vatId,
+        vatNumber: normalizeText(row.company_profile?.vatNumber ?? ""),
+        address: normalizeText(row.company_profile?.address ?? ""),
+        logoDataUrl: normalizeText(row.company_profile?.logoDataUrl ?? ""),
+      },
     });
     return;
   }
 
   if (requestUrl.pathname === "/api/workspace-state" && req.method === "GET") {
-    await withTenant(req, res, async (client) => {
-      const workspaceId = normalizeText(requestUrl.searchParams.get("workspaceId") ?? "workspace-main");
-      const row = (await client.query(`SELECT * FROM workspace_state WHERE workspace_id = $1`, [workspaceId])).rows[0] ?? null;
-      return { status: 200, body: row ? { state: row.payload, updatedAt: Number(row.updated_at) } : { state: null } };
-    });
+    const claims = requireAuth(req, res);
+    if (!claims) return;
+
+    const workspaceIdParam = normalizeText(requestUrl.searchParams.get("workspaceId"));
+    const requesterUserId = normalizeText(claims.accountId);
+    if (!workspaceIdParam || !requesterUserId) {
+      send(res, 400, { error: "Missing required parameters" });
+      return;
+    }
+
+    const requestedWorkspaceId = isUuid(workspaceIdParam) ? workspaceIdParam : null;
+    const fallbackWorkspaceId = normalizeText(claims.tenantId);
+    if (!isUuid(requesterUserId) || (requestedWorkspaceId === null && !isUuid(fallbackWorkspaceId))) {
+      send(res, 400, { error: "Invalid query" });
+      return;
+    }
+
+    const client = await pool.connect();
+    let membership = null;
+    try {
+      await client.query("BEGIN");
+      if (requestedWorkspaceId) {
+        const requestedMembershipRes = await client.query(
+          `SELECT wm.workspace_id, wm.account_id, wm.role, wm.active, t.schema_name
+           FROM public.workspace_memberships wm
+           LEFT JOIN public.tenants t ON t.tenant_id = wm.workspace_id
+           WHERE wm.workspace_id = $1 AND wm.account_id = $2 AND wm.active = true
+           LIMIT 1`,
+          [requestedWorkspaceId, requesterUserId]
+        );
+        membership = requestedMembershipRes.rows[0] ?? null;
+      }
+
+      if (!membership && isUuid(fallbackWorkspaceId)) {
+        const fallbackMembershipRes = await client.query(
+          `SELECT wm.workspace_id, wm.account_id, wm.role, wm.active, t.schema_name
+           FROM public.workspace_memberships wm
+           LEFT JOIN public.tenants t ON t.tenant_id = wm.workspace_id
+           WHERE wm.workspace_id = $1 AND wm.account_id = $2 AND wm.active = true
+           LIMIT 1`,
+          [fallbackWorkspaceId, requesterUserId]
+        );
+        membership = fallbackMembershipRes.rows[0] ?? null;
+      }
+
+      if (!membership) {
+        await client.query("ROLLBACK");
+        send(res, 403, { error: "Access denied" });
+        return;
+      }
+
+      if (!membership.schema_name) {
+        await client.query("ROLLBACK");
+        send(res, 404, { error: "Workspace not found" });
+        return;
+      }
+
+      await client.query(`SET LOCAL search_path TO ${quoteIdent(membership.schema_name)}, public`);
+
+      const row = (await client.query(`SELECT payload, updated_at FROM workspace_state WHERE workspace_id = $1`, [membership.workspace_id])).rows[0] ?? null;
+
+      await client.query("COMMIT");
+      send(res, 200, row ? { state: row.payload ?? null, updatedAt: Number(row.updated_at) } : { state: null });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("GET /api/workspace-state failed", {
+        message: error?.message,
+        stack: error?.stack,
+        workspaceId: membership?.workspace_id ?? null,
+        workspaceIdParam,
+        requesterUserId,
+        queryAccountId: normalizeText(requestUrl.searchParams.get("accountId")) || null,
+      });
+      send(res, 500, { message: "Вътрешна грешка." });
+    } finally {
+      client.release();
+    }
     return;
   }
 
@@ -456,6 +1071,83 @@ const server = createServer(async (req, res) => {
         [`workspace-state-${workspaceId}`, workspaceId, claims.accountId, now, JSON.stringify(body.payload ?? {})]
       );
       return { status: 200, body: { ok: true, updatedAt: now } };
+    });
+    return;
+  }
+
+
+  if (requestUrl.pathname === "/api/boards" && req.method === "GET") {
+    await withTenant(req, res, async (client) => {
+      const boards = (
+        await client.query(
+          `SELECT id, name, created_at
+           FROM boards
+           ORDER BY created_at ASC`
+        )
+      ).rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        createdAt: new Date(row.created_at).getTime(),
+      }));
+      return { status: 200, body: { boards } };
+    });
+    return;
+  }
+
+  if (requestUrl.pathname.match(/^\/api\/boards\/[^/]+\/columns$/) && req.method === "GET") {
+    const boardId = normalizeText(requestUrl.pathname.split("/")[3] ?? "");
+    await withTenant(req, res, async (client) => {
+      const columns = (
+        await client.query(
+          `SELECT id, board_id AS "boardId", name, position, wip_limit AS "wipLimit"
+           FROM columns
+           WHERE board_id = $1
+           ORDER BY position ASC, created_at ASC`,
+          [boardId]
+        )
+      ).rows;
+      return { status: 200, body: { columns } };
+    });
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/tasks" && req.method === "GET") {
+    const boardId = normalizeText(requestUrl.searchParams.get("boardId") ?? "");
+    const assignee = normalizeText(requestUrl.searchParams.get("assignee") ?? "");
+    await withTenant(req, res, async (client, claims) => {
+      try {
+        await client.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_id UUID`);
+      } catch {}
+
+      if (assignee === "me") {
+        const tasks = (
+          await client.query(
+            `SELECT id, board_id AS "boardId", column_id AS "column", column_id AS "listId", title, description,
+                    due_date AS due, created_at AS "createdAt", assignee_id AS "assigneeId"
+             FROM tasks
+             WHERE assignee_id = $1
+             ORDER BY created_at ASC`,
+            [claims.accountId]
+          )
+        ).rows;
+        return { status: 200, body: { tasks } };
+      }
+
+      if (!boardId) {
+        return { status: 400, body: { message: "Липсва boardId." } };
+      }
+
+      const tasks = (
+        await client.query(
+          `SELECT id, board_id AS "boardId", column_id AS "column", column_id AS "listId", title, description,
+                  due_date AS due, created_at AS "createdAt", assignee_id AS "assigneeId"
+           FROM tasks
+           WHERE board_id = $1
+           ORDER BY created_at ASC`,
+          [boardId]
+        )
+      ).rows;
+      return { status: 200, body: { tasks } };
     });
     return;
   }
@@ -481,10 +1173,13 @@ const server = createServer(async (req, res) => {
         createdAt: new Date(),
       };
 
+      try {
+        await client.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_id UUID`);
+      } catch {}
       await client.query(
-        `INSERT INTO tasks (id, board_id, column_id, title, description, due_date)
-         VALUES ($1,$2,$3,$4,$5,$6::date)`,
-        [card.id, card.boardId, card.listId, card.title, card.description || null, card.due || null]
+        `INSERT INTO tasks (id, board_id, column_id, title, description, due_date, assignee_id)
+         VALUES ($1,$2,$3,$4,$5,$6::date,$7)`,
+        [card.id, card.boardId, card.listId, card.title, card.description || null, card.due || null, normalizeText(body.assigneeId) || null]
       );
 
       return { status: 201, body: { card } };
@@ -513,9 +1208,25 @@ const server = createServer(async (req, res) => {
         listId: normalizeText(body.listId ?? found.column_id),
       };
 
+      try {
+        await client.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_id UUID`);
+      } catch {}
       await client.query(
-        `UPDATE tasks SET title = $2, description = $3, due_date = $4::date, column_id = $5 WHERE id = $1`,
-        [cardId, next.title, next.description || null, next.due || null, next.listId]
+        `UPDATE tasks
+         SET title = $2,
+             description = $3,
+             due_date = $4::date,
+             column_id = $5,
+             assignee_id = COALESCE(NULLIF($6, ''), assignee_id)
+         WHERE id = $1`,
+        [
+          cardId,
+          next.title,
+          next.description || null,
+          next.due || null,
+          next.listId,
+          normalizeText(body.assigneeId || body.assignedUserId || ""),
+        ]
       );
 
       return {
@@ -539,86 +1250,703 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (requestUrl.pathname === "/api/users/lookup" && req.method === "GET") {
+    const query = normalizeText(requestUrl.searchParams.get("query") ?? "");
+    if (!query) {
+      send(res, 400, { exists: false, message: "Липсва query." });
+      return;
+    }
+
+    const isEmail = query.includes("@");
+    const row = (
+      await pool.query(
+        `SELECT id, public_id, email, display_name FROM public.accounts WHERE ${isEmail ? "lower(email) = lower($1)" : "public_id = upper($1)"}`,
+        [query]
+      )
+    ).rows[0];
+    send(res, 200, { exists: Boolean(row), account: row ?? null });
+    return;
+  }
+
+
+  if (requestUrl.pathname.match(/^\/api\/workspaces\/[^/]+\/invites$/) && req.method === "POST") {
+    const claims = requireAuth(req, res);
+    if (!claims) return;
+
+    const workspaceId = normalizeText(requestUrl.pathname.split("/")[3] ?? "");
+    const body = await readBody(req);
+    const role = normalizeRole(body.role);
+    const inviteeEmail = normalizeEmail(body.inviteeEmail ?? body.email);
+    const inviteeUserId = normalizeText(body.inviteeUserId ?? body.public_id ?? body.publicId);
+
+    if (!workspaceId || !INVITE_ROLES.includes(role)) {
+      send(res, 400, { message: "Невалидна покана." });
+      return;
+    }
+
+    const hasInviteeEmail = Boolean(inviteeEmail);
+    const hasInviteeUserId = Boolean(inviteeUserId);
+    if (hasInviteeEmail === hasInviteeUserId) {
+      send(res, 400, { message: "Подай точно едно поле: inviteeEmail или inviteeUserId." });
+      return;
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const membership = await requireWorkspaceRole(client, workspaceId, claims.accountId, ["OWNER", "ADMIN"]);
+      if (!membership) {
+        await client.query("ROLLBACK");
+        send(res, 403, { message: "Само OWNER/ADMIN могат да канят." });
+        return;
+      }
+
+      let inviteeAccountId = null;
+      let inviteeEmailValue = null;
+
+      if (hasInviteeUserId) {
+        const account = (
+          await client.query(
+            `SELECT id, email, public_id
+             FROM public.accounts
+             WHERE upper(public_id) = upper($1) OR id::text = $1
+             LIMIT 1`,
+            [inviteeUserId]
+          )
+        ).rows[0];
+        if (!account) {
+          await client.query("ROLLBACK");
+          send(res, 404, { message: "User not found" });
+          return;
+        }
+        inviteeAccountId = account.id;
+        inviteeEmailValue = account.email;
+      } else {
+        const account = (await client.query(`SELECT id, email, public_id FROM public.accounts WHERE lower(email) = lower($1)`, [inviteeEmail])).rows[0];
+        if (!account) {
+          await client.query("ROLLBACK");
+          send(res, 404, { message: "User not found" });
+          return;
+        }
+        inviteeAccountId = account.id;
+        inviteeEmailValue = account.email;
+      }
+
+      if (inviteeAccountId === claims.accountId) {
+        await client.query("ROLLBACK");
+        send(res, 400, { message: "Не можеш да изпратиш покана към себе си." });
+        return;
+      }
+
+      const memberCheck = await getMembership(client, workspaceId, inviteeAccountId);
+      if (memberCheck?.active) {
+        await client.query("ROLLBACK");
+        send(res, 409, { message: "Потребителят вече е член." });
+        return;
+      }
+
+      const pendingCheck = await client.query(
+        `SELECT id FROM public.workspace_invites
+         WHERE workspace_id = $1 AND invitee_account_id = $2 AND status = 'pending'
+         LIMIT 1`,
+        [workspaceId, inviteeAccountId]
+      );
+      if (pendingCheck.rowCount > 0) {
+        await client.query("ROLLBACK");
+        send(res, 409, { message: "Invite already sent" });
+        return;
+      }
+
+      const invite = (
+        await client.query(
+          `INSERT INTO public.workspace_invites (workspace_id, invited_by_account_id, invitee_account_id, invitee_email, role)
+           VALUES ($1, $2, $3, $4, $5)
+           RETURNING id, workspace_id, invited_by_account_id, invitee_account_id, invitee_email, role, status, created_at, responded_at`,
+          [workspaceId, claims.accountId, inviteeAccountId, inviteeEmailValue, role]
+        )
+      ).rows[0];
+
+      const normalizedInvite = {
+        ...invite,
+        token: invite.id,
+        inviteId: invite.id,
+        inviteeUserId: invite.invitee_account_id,
+        createdAt: invite.created_at,
+        inviteLink: buildInviteLink(req, invite.id),
+      };
+
+      await client.query("COMMIT");
+      send(res, 201, {
+        invite: normalizedInvite,
+        inviteId: invite.id,
+        token: invite.id,
+        inviteLink: normalizedInvite.inviteLink,
+        status: String(invite.status || "").toUpperCase(),
+        role: invite.role,
+        inviteeUserId: invite.invitee_account_id,
+      });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      if (error?.code === "23505") {
+        send(res, 409, { message: "Invite already sent" });
+        return;
+      }
+      console.error(error);
+      send(res, 500, { message: "Грешка при създаване на покана." });
+    } finally {
+      client.release();
+    }
+    return;
+  }
+
+  if (requestUrl.pathname.match(/^\/api\/workspaces\/[^/]+\/members$/) && req.method === "GET") {
+    const claims = requireAuth(req, res);
+    if (!claims) return;
+    const workspaceId = normalizeText(requestUrl.pathname.split("/")[3] ?? "");
+
+    const client = await pool.connect();
+    try {
+      const membership = await requireWorkspaceRole(client, workspaceId, claims.accountId, []);
+      if (!membership) {
+        send(res, 403, { message: "Нямаш достъп до този workspace." });
+        return;
+      }
+
+      const members = (await client.query(
+        `SELECT wm.account_id AS id, a.email, a.display_name, a.public_id, wm.role, wm.active, wm.created_at
+         FROM public.workspace_memberships wm
+         JOIN public.accounts a ON a.id = wm.account_id
+         WHERE wm.workspace_id = $1 AND wm.active = true
+         ORDER BY wm.created_at DESC`,
+        [workspaceId]
+      )).rows;
+
+      send(res, 200, { members });
+    } finally {
+      client.release();
+    }
+    return;
+  }
+
+  if (requestUrl.pathname.match(/^\/api\/tenants\/[^/]+\/invites$/) && req.method === "POST") {
+    const claims = requireAuth(req, res);
+    if (!claims) return;
+
+    const tenantId = normalizeText(requestUrl.pathname.split("/")[3] ?? "");
+    const body = await readBody(req);
+    const target = normalizeText(body.target);
+    const role = normalizeRole(body.role);
+
+    if (!tenantId || !target || !INVITE_ROLES.includes(role)) {
+      send(res, 400, { message: "Невалидна покана." });
+      return;
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const inviterMembership = await getMembership(client, tenantId, claims.accountId);
+      if (!inviterMembership || !isOwnerOrAdmin(inviterMembership.role)) {
+        await client.query("ROLLBACK");
+        send(res, 403, { message: "Само OWNER/ADMIN могат да канят." });
+        return;
+      }
+
+      let invitedAccountId = null;
+      let invitedEmail = null;
+
+      if (target.includes("@")) {
+        invitedEmail = normalizeEmail(target);
+        const account = (await client.query(`SELECT id, email FROM public.accounts WHERE lower(email) = lower($1)`, [invitedEmail])).rows[0];
+        if (account) {
+          invitedAccountId = account.id;
+          invitedEmail = account.email;
+        }
+      } else {
+        const account = (await client.query(`SELECT id, email FROM public.accounts WHERE public_id = upper($1)`, [target])).rows[0];
+        if (!account) {
+          await client.query("ROLLBACK");
+          send(res, 404, { message: "User not found" });
+          return;
+        }
+        invitedAccountId = account.id;
+        invitedEmail = account.email;
+      }
+
+      if (invitedAccountId) {
+        const memberCheck = await getMembership(client, tenantId, invitedAccountId);
+        if (memberCheck) {
+          await client.query("ROLLBACK");
+          send(res, 409, { message: "Already a member" });
+          return;
+        }
+      }
+
+      const invite = (
+        await client.query(
+          `INSERT INTO public.tenant_invites (
+            tenant_id, invited_by_account_id, invited_account_id, invited_email, role, token
+           ) VALUES ($1, $2, $3, $4, $5, $6)
+           RETURNING *`,
+          [tenantId, claims.accountId, invitedAccountId, invitedEmail, role, generateInviteToken()]
+        )
+      ).rows[0];
+      await client.query(
+        `INSERT INTO public.workspace_invites (workspace_id, invited_by_account_id, invitee_account_id, invitee_email, role)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT DO NOTHING`,
+        [tenantId, claims.accountId, invitedAccountId, invitedEmail, role]
+      );
+
+      await client.query("COMMIT");
+      send(res, 201, { invite });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      if (error?.code === "23505") {
+        send(res, 409, { message: "Вече има активна покана за този потребител." });
+        return;
+      }
+      console.error(error);
+      send(res, 500, { message: "Грешка при създаване на покана." });
+    } finally {
+      client.release();
+    }
+    return;
+  }
+
   if (requestUrl.pathname === "/api/invites" && req.method === "GET") {
-    await withTenant(req, res, async (client) => {
-      const invites = (await client.query(`SELECT * FROM invites ORDER BY created_at DESC`)).rows;
+    await withTenant(req, res, async (client, claims) => {
+      if (!isOwnerOrAdmin(claims.membershipRole)) {
+        return { status: 403, body: { message: "Недостатъчни права." } };
+      }
+      const invites = (
+        await client.query(
+          `SELECT ti.id, ti.invited_email AS email, ti.role, ti.created_at AS "createdAt", ti.expires_at AS "expiresAt", ti.token, ti.tenant_id AS "tenantId", a.display_name AS "invitedByName"
+           FROM public.tenant_invites ti
+           LEFT JOIN public.accounts a ON a.id = ti.invited_by_account_id
+           WHERE ti.tenant_id = $1 AND ti.status = 'PENDING'
+           ORDER BY ti.created_at DESC`,
+          [claims.tenantId]
+        )
+      ).rows;
       return { status: 200, body: { invites } };
     });
     return;
   }
 
   if (requestUrl.pathname === "/api/invites/inbox" && req.method === "GET") {
-    await withTenant(req, res, async (client) => {
-      const email = normalizeEmail(requestUrl.searchParams.get("email") ?? "");
-      const invites = (await client.query(`SELECT * FROM invites WHERE lower(email) = $1 ORDER BY created_at DESC`, [email])).rows;
-      return { status: 200, body: { invites } };
-    });
+    const claims = requireAuth(req, res);
+    if (!claims) return;
+
+    const invites = (
+      await pool.query(
+        `SELECT ti.id, ti.role, ti.created_at AS "createdAt", ti.expires_at AS "expiresAt", ti.token, ti.tenant_id AS "tenantId",
+                t.schema_name AS "workspaceName",
+                inviter.display_name AS "invitedByName",
+                inviter.email AS "invitedByEmail",
+                ti.invited_email AS email,
+                'incoming'::text AS __scope
+         FROM public.tenant_invites ti
+         JOIN public.tenants t ON t.tenant_id = ti.tenant_id
+         LEFT JOIN public.accounts inviter ON inviter.id = ti.invited_by_account_id
+         WHERE ti.invited_account_id = $1
+           AND ti.status = 'PENDING'
+           AND ti.expires_at > now()
+
+         UNION ALL
+
+         SELECT wi.id, wi.role, wi.created_at AS "createdAt", NULL::timestamptz AS "expiresAt", wi.id::text AS token, wi.workspace_id AS "tenantId",
+                t.schema_name AS "workspaceName",
+                inviter.display_name AS "invitedByName",
+                inviter.email AS "invitedByEmail",
+                wi.invitee_email AS email,
+                'incoming'::text AS __scope
+         FROM public.workspace_invites wi
+         LEFT JOIN public.tenants t ON t.tenant_id = wi.workspace_id
+         LEFT JOIN public.accounts inviter ON inviter.id = wi.invited_by_account_id
+         WHERE wi.invitee_account_id = $1
+           AND wi.status = 'pending'
+
+         ORDER BY "createdAt" DESC`,
+        [claims.accountId]
+      )
+    ).rows;
+
+    send(res, 200, { invites });
     return;
   }
 
-  if (requestUrl.pathname === "/api/invites" && req.method === "POST") {
-    const body = await readBody(req);
-    await withTenant(req, res, async (client, claims) => {
-      const invite = {
-        id: randomUUID(),
-        email: normalizeEmail(body.email),
-        role: normalizeText(body.role || "member").toLowerCase(),
-        token: randomBytes(16).toString("hex"),
-        createdAt: new Date(),
-      };
+  if (requestUrl.pathname === "/api/me/invites" && req.method === "GET") {
+    const claims = requireAuth(req, res);
+    if (!claims) return;
+
+    const invites = (
+      await pool.query(
+        `SELECT ti.id, ti.role, ti.created_at AS "createdAt", ti.expires_at AS "expiresAt", ti.token, ti.tenant_id AS "tenantId",
+                t.schema_name AS "workspaceName",
+                COALESCE(owner_acc.display_name, t.schema_name) AS "accountName",
+                inviter.display_name AS "invitedByName",
+                inviter.email AS "invitedByEmail",
+                ti.invited_email AS email
+         FROM public.tenant_invites ti
+         JOIN public.tenants t ON t.tenant_id = ti.tenant_id
+         LEFT JOIN public.accounts inviter ON inviter.id = ti.invited_by_account_id
+         LEFT JOIN public.workspace_memberships owner_wm
+           ON owner_wm.workspace_id = ti.tenant_id AND owner_wm.role = 'OWNER' AND owner_wm.active = true
+         LEFT JOIN public.accounts owner_acc ON owner_acc.id = owner_wm.account_id
+         WHERE ti.invited_account_id = $1
+           AND ti.status = 'PENDING'
+           AND ti.expires_at > now()
+
+         UNION ALL
+
+         SELECT wi.id, wi.role, wi.created_at AS "createdAt", NULL::timestamptz AS "expiresAt", wi.id::text AS token, wi.workspace_id AS "tenantId",
+                t.schema_name AS "workspaceName",
+                COALESCE(owner_acc.display_name, t.schema_name) AS "accountName",
+                inviter.display_name AS "invitedByName",
+                inviter.email AS "invitedByEmail",
+                wi.invitee_email AS email
+         FROM public.workspace_invites wi
+         LEFT JOIN public.tenants t ON t.tenant_id = wi.workspace_id
+         LEFT JOIN public.accounts inviter ON inviter.id = wi.invited_by_account_id
+         LEFT JOIN public.workspace_memberships owner_wm
+           ON owner_wm.workspace_id = wi.workspace_id AND owner_wm.role = 'OWNER' AND owner_wm.active = true
+         LEFT JOIN public.accounts owner_acc ON owner_acc.id = owner_wm.account_id
+         WHERE wi.invitee_account_id = $1
+           AND wi.status = 'pending'
+
+         ORDER BY "createdAt" DESC`,
+        [claims.accountId]
+      )
+    ).rows;
+
+    send(res, 200, { invites });
+    return;
+  }
+
+  if (requestUrl.pathname.match(/^\/api\/invites\/[^/]+\/accept$/) && req.method === "POST") {
+    const claims = requireAuth(req, res);
+    if (!claims) return;
+
+    const inviteId = normalizeText(requestUrl.pathname.split("/")[3] ?? "");
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      let invite = (
+        await client.query(
+          `SELECT * FROM public.tenant_invites WHERE id = $1 FOR UPDATE`,
+          [inviteId]
+        )
+      ).rows[0];
+      let inviteSource = "tenant";
+
+      if (!invite) {
+        const workspaceInvite = (
+          await client.query(`SELECT * FROM public.workspace_invites WHERE id = $1 FOR UPDATE`, [inviteId])
+        ).rows[0];
+        if (workspaceInvite) {
+          invite = {
+            ...workspaceInvite,
+            tenant_id: workspaceInvite.workspace_id,
+            invited_account_id: workspaceInvite.invitee_account_id,
+            invited_email: workspaceInvite.invitee_email,
+            status: String(workspaceInvite.status || "").toUpperCase(),
+            role: workspaceInvite.role,
+            expires_at: null,
+          };
+          inviteSource = "workspace";
+        }
+      }
+
+      if (!invite || invite.invited_account_id !== claims.accountId) {
+        await client.query("ROLLBACK");
+        send(res, 404, { message: "Поканата не е намерена." });
+        return;
+      }
+      if (invite.status !== "PENDING") {
+        await client.query("ROLLBACK");
+        send(res, 409, { message: "Поканата вече е обработена." });
+        return;
+      }
+      if (invite.expires_at && new Date(invite.expires_at).getTime() <= Date.now()) {
+        await client.query(
+          `UPDATE public.tenant_invites SET status = 'EXPIRED', responded_at = now() WHERE id = $1`,
+          [inviteId]
+        );
+        await client.query("COMMIT");
+        send(res, 409, { message: "Поканата е изтекла." });
+        return;
+      }
+
       await client.query(
-        `INSERT INTO invites (id, email, role, token, created_at)
-         VALUES ($1,$2,$3,$4,$5)`,
-        [invite.id, invite.email, invite.role, invite.token, invite.createdAt]
+        `INSERT INTO public.workspace_memberships (workspace_id, account_id, role, active)
+         VALUES ($1, $2, $3, true)
+         ON CONFLICT (workspace_id, account_id)
+         DO UPDATE SET role = EXCLUDED.role, active = true`,
+        [invite.tenant_id, claims.accountId, invite.role]
       );
-      return { status: 201, body: { invite } };
-    });
+      if (inviteSource === "tenant") {
+        await client.query(
+          `UPDATE public.tenant_invites SET status = 'ACCEPTED', responded_at = now() WHERE id = $1`,
+          [inviteId]
+        );
+      }
+      await client.query(
+        `UPDATE public.workspace_invites
+         SET status = 'accepted', responded_at = now()
+         WHERE id = $1`,
+        [inviteId]
+      );
+      await client.query(
+        `UPDATE public.workspace_invites
+         SET status = 'accepted', responded_at = now()
+         WHERE workspace_id = $1 AND (invitee_account_id = $2 OR lower(invitee_email) = lower($3)) AND status = 'pending'`,
+        [invite.tenant_id, claims.accountId, invite.invited_email || '']
+      );
+      await client.query(`UPDATE public.accounts SET tenant_id = $2 WHERE id = $1`, [claims.accountId, invite.tenant_id]);
+      await client.query("COMMIT");
+      send(res, 200, { ok: true });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error(error);
+      send(res, 500, { message: "Грешка при приемане на покана." });
+    } finally {
+      client.release();
+    }
+    return;
+  }
+
+  if (requestUrl.pathname.match(/^\/api\/invites\/[^/]+\/decline$/) && req.method === "POST") {
+    const claims = requireAuth(req, res);
+    if (!claims) return;
+
+    const inviteId = normalizeText(requestUrl.pathname.split("/")[3] ?? "");
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      let invite = (await client.query(`SELECT * FROM public.tenant_invites WHERE id = $1 FOR UPDATE`, [inviteId])).rows[0];
+      let inviteSource = "tenant";
+
+      if (!invite) {
+        const workspaceInvite = (await client.query(`SELECT * FROM public.workspace_invites WHERE id = $1 FOR UPDATE`, [inviteId])).rows[0];
+        if (workspaceInvite) {
+          invite = {
+            ...workspaceInvite,
+            invited_account_id: workspaceInvite.invitee_account_id,
+            status: String(workspaceInvite.status || "").toUpperCase(),
+          };
+          inviteSource = "workspace";
+        }
+      }
+
+      if (!invite || invite.invited_account_id !== claims.accountId) {
+        await client.query("ROLLBACK");
+        send(res, 404, { message: "Поканата не е намерена." });
+        return;
+      }
+      if (invite.status !== "PENDING") {
+        await client.query("ROLLBACK");
+        send(res, 409, { message: "Поканата вече е обработена." });
+        return;
+      }
+
+      if (inviteSource === "tenant") {
+        await client.query(
+          `UPDATE public.tenant_invites
+           SET status = 'DECLINED', responded_at = now()
+           WHERE id = $1`,
+          [inviteId]
+        );
+      }
+      await client.query(
+        `UPDATE public.workspace_invites
+         SET status = 'declined', responded_at = now()
+         WHERE id = $1`,
+        [inviteId]
+      );
+
+      await client.query("COMMIT");
+      send(res, 200, { ok: true });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error(error);
+      send(res, 500, { message: "Грешка при отказ на покана." });
+    } finally {
+      client.release();
+    }
     return;
   }
 
   if (requestUrl.pathname === "/api/invites/revoke" && req.method === "POST") {
     const body = await readBody(req);
-    await withTenant(req, res, async (client) => {
-      await client.query(`DELETE FROM invites WHERE id = $1`, [normalizeText(body.inviteId)]);
-      return { status: 200, body: { ok: true } };
+    await withTenant(req, res, async (client, claims) => {
+      if (!isOwnerOrAdmin(claims.membershipRole)) {
+        return { status: 403, body: { message: "Недостатъчни права." } };
+      }
+      const inviteId = normalizeText(body.inviteId);
+      const result = await client.query(
+        `UPDATE public.tenant_invites
+         SET status = 'REVOKED', responded_at = now()
+         WHERE id = $1 AND tenant_id = $2 AND status = 'PENDING'`,
+        [inviteId, claims.tenantId]
+      );
+      return { status: result.rowCount ? 200 : 404, body: result.rowCount ? { ok: true } : { message: "Поканата не е намерена." } };
     });
     return;
   }
 
   if (requestUrl.pathname === "/api/invites/respond" && req.method === "POST") {
-    const body = await readBody(req);
-    await withTenant(req, res, async (client) => {
-      const inviteId = normalizeText(body.inviteId);
-      const action = normalizeText(body.action).toLowerCase();
-      const invite = (await client.query(`SELECT * FROM invites WHERE id = $1`, [inviteId])).rows[0];
-      if (!invite) return { status: 404, body: { message: "Поканата не е намерена." } };
+    const claims = requireAuth(req, res);
+    if (!claims) return;
 
-      if (action === "accept") {
-        await client.query(`
-          UPDATE invites SET accepted_at = now() WHERE id = $1
-        `, [inviteId]);
+    const body = await readBody(req);
+    const inviteId = normalizeText(body.inviteId);
+    const action = normalizeText(body.action).toLowerCase();
+
+    if (action === "accept") {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const invite = (await client.query(`SELECT * FROM public.tenant_invites WHERE id = $1 FOR UPDATE`, [inviteId])).rows[0];
+        if (!invite || invite.invited_account_id !== claims.accountId) {
+          await client.query("ROLLBACK");
+          send(res, 404, { message: "Поканата не е намерена." });
+          return;
+        }
+        if (invite.status !== "PENDING" || new Date(invite.expires_at).getTime() <= Date.now()) {
+          await client.query("ROLLBACK");
+          send(res, 409, { message: "Поканата не е активна." });
+          return;
+        }
+        await client.query(
+          `INSERT INTO public.workspace_memberships (workspace_id, account_id, role, active)
+           VALUES ($1, $2, $3, true)
+           ON CONFLICT (workspace_id, account_id)
+           DO UPDATE SET role = EXCLUDED.role, active = true`,
+          [invite.tenant_id, claims.accountId, invite.role]
+        );
+        await client.query(`UPDATE public.tenant_invites SET status = 'ACCEPTED', responded_at = now() WHERE id = $1`, [inviteId]);
+        await client.query("COMMIT");
+        send(res, 200, { ok: true });
+      } catch (error) {
+        try { await client.query("ROLLBACK"); } catch {}
+        console.error(error);
+        send(res, 500, { message: "Грешка при приемане на покана." });
+      } finally {
+        client.release();
       }
-      if (action === "decline") {
-        await client.query(`DELETE FROM invites WHERE id = $1`, [inviteId]);
+      return;
+    }
+
+    if (action === "decline") {
+      const result = await pool.query(
+        `UPDATE public.tenant_invites
+         SET status = 'DECLINED', responded_at = now()
+         WHERE id = $1 AND invited_account_id = $2 AND status = 'PENDING'`,
+        [inviteId, claims.accountId]
+      );
+      send(res, result.rowCount ? 200 : 404, result.rowCount ? { ok: true } : { message: "Поканата не е намерена." });
+      return;
+    }
+
+    send(res, 400, { message: "Невалидно действие." });
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/accounts/members/remove" && req.method === "POST") {
+    const body = await readBody(req);
+    await withTenant(req, res, async (client, claims) => {
+      if (!isOwnerOrAdmin(claims.membershipRole)) {
+        return { status: 403, body: { message: "Недостатъчни права." } };
       }
-      return { status: 200, body: { invite: { ...invite, action } } };
+      const memberId = normalizeText(body.memberUserId || body.memberId);
+      const membership = await getMembership(client, claims.tenantId, memberId);
+      if (!membership) {
+        return { status: 404, body: { message: "Членът не е намерен." } };
+      }
+      if (membership.role === 'OWNER') {
+        return { status: 409, body: { message: "Owner не може да бъде премахнат без transfer ownership." } };
+      }
+      await client.query(
+        `UPDATE public.workspace_memberships
+         SET active = false
+         WHERE workspace_id = $1 AND account_id = $2`,
+        [claims.tenantId, memberId]
+      );
+      return { status: 200, body: { ok: true } };
+    });
+    return;
+  }
+
+
+  if (requestUrl.pathname === "/api/accounts/members/role" && req.method === "POST") {
+    const body = await readBody(req);
+    await withTenant(req, res, async (client, claims) => {
+      if (!isOwnerOrAdmin(claims.membershipRole)) {
+        return { status: 403, body: { message: "Недостатъчни права." } };
+      }
+
+      const memberId = normalizeText(body.memberUserId || body.memberId);
+      const nextRole = normalizeRole(body.role);
+      if (!memberId || !MEMBERSHIP_ROLES.includes(nextRole) || nextRole === 'OWNER') {
+        return { status: 400, body: { message: "Невалидна роля." } };
+      }
+
+      const membership = await getMembership(client, claims.tenantId, memberId);
+      if (!membership) {
+        return { status: 404, body: { message: "Членът не е намерен." } };
+      }
+      if (membership.role === 'OWNER') {
+        return { status: 409, body: { message: "Owner ролята не може да се променя оттук." } };
+      }
+
+      await client.query(
+        `UPDATE public.workspace_memberships
+         SET role = $3
+         WHERE workspace_id = $1 AND account_id = $2`,
+        [claims.tenantId, memberId, nextRole]
+      );
+      return { status: 200, body: { ok: true } };
     });
     return;
   }
 
   if (requestUrl.pathname === "/api/workspaces/members-summary" && req.method === "GET") {
-    await withTenant(req, res, async (client) => {
-      const acceptedMembers = (await client.query(`SELECT * FROM members ORDER BY created_at DESC`)).rows;
-      const pendingInvites = (await client.query(`SELECT * FROM invites WHERE accepted_at IS NULL`)).rows;
+    await withTenant(req, res, async (client, claims) => {
+      const acceptedMembers = (
+        await client.query(
+          `SELECT wm.account_id AS id, wm.account_id AS "userId", a.email, a.display_name AS name, wm.role, wm.created_at AS "joinedAt"
+           FROM public.workspace_memberships wm
+           JOIN public.accounts a ON a.id = wm.account_id
+           WHERE wm.workspace_id = $1 AND wm.active = true
+           ORDER BY wm.created_at DESC`,
+          [claims.tenantId]
+        )
+      ).rows;
+
+      const pendingInvites = (
+        await client.query(
+          `SELECT ti.id, ti.invited_email AS email, ti.role, ti.created_at AS "createdAt", ti.expires_at AS "expiresAt",
+                  inviter.display_name AS "invitedByName"
+           FROM public.tenant_invites ti
+           LEFT JOIN public.accounts inviter ON inviter.id = ti.invited_by_account_id
+           WHERE ti.tenant_id = $1 AND ti.status = 'PENDING'
+
+           UNION ALL
+
+           SELECT wi.id, wi.invitee_email AS email, wi.role, wi.created_at AS "createdAt", NULL::timestamptz AS "expiresAt",
+                  inviter.display_name AS "invitedByName"
+           FROM public.workspace_invites wi
+           LEFT JOIN public.accounts inviter ON inviter.id = wi.invited_by_account_id
+           WHERE wi.workspace_id = $1 AND wi.status = 'pending'
+
+           ORDER BY "createdAt" DESC`,
+          [claims.tenantId]
+        )
+      ).rows;
+
       return { status: 200, body: { acceptedMembers, pendingInvites } };
     });
-    return;
-  }
-
-  if (requestUrl.pathname === "/api/users/by-email" && req.method === "GET") {
-    const email = normalizeEmail(requestUrl.searchParams.get("email") ?? "");
-    const row = (await pool.query(`SELECT id, tenant_id, display_name, email FROM public.accounts WHERE email = $1`, [email])).rows[0] ?? null;
-    send(res, 200, { user: row ? { id: row.id, accountId: row.id, tenantId: row.tenant_id, name: row.display_name, email: row.email, role: "Owner", teamIds: [] } : null });
     return;
   }
 
@@ -650,14 +1978,15 @@ const server = createServer(async (req, res) => {
 });
 
 initDb()
-  .then(() => {
-    dbReady = Boolean(pool);
+  .then(async () => {
+    dbReady = await tryRecoverDb();
     server.listen(PORT, HOST, () => {
-      console.log(`[Teamio] Server listening on http://${HOST}:${PORT}`);
+      console.log(`[Teamio] Server listening on http://${HOST}:${PORT} (dbReady=${dbReady}, dbConfigSource=${dbConfigSource})`);
     });
   })
   .catch((error) => {
     dbReady = false;
+    dbInitError = String(error?.message || error);
     console.error("[Teamio] Грешка при инициализация на PostgreSQL:", error);
     server.listen(PORT, HOST, () => {
       console.log(`[Teamio] Server listening in degraded mode on http://${HOST}:${PORT}`);

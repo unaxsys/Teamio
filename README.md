@@ -108,6 +108,11 @@ pm2 restart teamio-api --update-env
 
 If `baseUrl` is `localhost` in production, set `BASE_URL` in `server/.env` to your public URL (example `https://teamio.your-domain.com`).
 
+If `dbReady` is `false` in `/api/health`:
+- verify `server/.env` contains `DATABASE_URL` (or `DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASS`)
+- run `pm2 restart teamio-api --update-env` after env changes
+- check `dbConfigSource` and `dbInitError` in `/api/health` response for fast diagnosis
+
 
 By default the web app still works in local demo mode.
 To connect the UI to the API server, open browser console and set:
