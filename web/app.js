@@ -477,7 +477,7 @@ const updateBoardTopbar = () => {
     boardContextVisibility.textContent = "Споделен workspace борд";
     return;
   }
-  boardContextVisibility.textContent = "Workspace борд";
+  boardContextVisibility.textContent = "Workspace";
 };
 
 const toggleBoardMenu = (isOpen) => {
